@@ -2855,3 +2855,76 @@ button {
     min-height: 32px;
   }
 }
+
+/* Supporting text stays readable at ordinary desktop viewing distances. */
+@media (min-width: 901px) {
+  .nav-item {
+    font-size: 13px;
+  }
+  .breadcrumb,
+  .topbar-subtitle {
+    font-size: 12px;
+  }
+  .demo-tag {
+    font-size: 11px;
+  }
+  .hero-description {
+    font-size: 15px;
+  }
+  .composer-input textarea {
+    font-size: 14px;
+  }
+  .budget-control,
+  .budget-control input,
+  .preference-button {
+    font-size: 11px;
+  }
+  .search-submit {
+    font-size: 12px;
+  }
+  .suggested > span,
+  .trust-line {
+    font-size: 10px;
+  }
+  .section-kicker {
+    font-size: 9px;
+  }
+  .category-tile > span {
+    font-size: 12px;
+  }
+  .section-caption,
+  .section-heading > .text-button {
+    font-size: 11px;
+  }
+  .product-brand {
+    font-size: 10px;
+  }
+  .product-name {
+    font-size: 15px;
+  }
+  .product-description {
+    font-size: 11px;
+    min-height: 38px;
+  }
+  .product-rec {
+    font-size: 10px;
+  }
+  .product-price-row strong {
+    font-size: 21px;
+  }
+  .product-price-row > span {
+    font-size: 10px;
+  }
+  .compare-button,
+  .detail-link {
+    font-size: 11px;
+  }
+  .manifesto p,
+  .manifesto > .text-button {
+    font-size: 11px;
+  }
+  .footer,
+  .footer button {
+    font-size: 10px;
+  }
+}
