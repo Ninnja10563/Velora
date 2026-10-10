@@ -1,52 +1,52 @@
-import { getChatGPTUser } from "@/app/chatgpt-auth";
-import { accountStateSchema, allowAccountMutation, BodyTooLargeError, isSameOriginRequest, readBoundedJson } from "@/lib/account-validation";
-import { deleteAccountState, readAccountState, storageConfigured, trustedIdentityEnabled, writeAccountState } from "@/lib/storage";
+import { accountStateSchema, allowAccountMutation, BodyTooLargeError, isSameOriginRequest, readBoundedJson } from "../../../lib/account-validation.ts";
+import { deleteAccountState, readAccountState, storageConfigured, writeAccountState } from "../../../lib/storage.ts";
+import { authConfigured, authFailure, authResponse, clearSession, deleteSupabaseIdentity, resolveUser, type AuthContext } from "../../../lib/auth.ts";
+import { HttpError } from "../../../lib/security.ts";
 
 export const dynamic = "force-dynamic";
 
-const noStore = { "Cache-Control": "private, no-store", "Vary": "Cookie, oai-authenticated-user-id" };
-function reply(value: unknown, status = 200) { return Response.json(value, { status, headers: noStore }); }
-async function identity() { return trustedIdentityEnabled() ? getChatGPTUser() : null; }
-
-export async function GET() {
-  const user = await identity();
-  if (!user) return reply({ authenticated: false, user: null, syncAvailable: false, identityAvailable: trustedIdentityEnabled(), message: "Guest mode: saved products stay in this browser." });
-  const account = { authenticated: true, user: { id: user.userId, displayName: user.displayName }, identityAvailable: true };
-  if (!storageConfigured()) return reply({ ...account, syncAvailable: false, message: "Account sync is not configured. Your browser shortlist still works." }, 503);
+export async function GET(request: Request) {
+  let context: AuthContext | undefined;
   try {
-    return reply({ ...account, syncAvailable: true, state: await readAccountState(user.userId) });
-  } catch {
-    return reply({ ...account, syncAvailable: false, message: "Account storage could not be reached. Browser data is unchanged." }, 503);
-  }
+    context = await resolveUser(request);
+    if (!context.user) return authResponse({ authenticated: false, user: null, syncAvailable: false, identityAvailable: authConfigured() || process.env.TRUST_SITES_IDENTITY === "true", authAvailable: authConfigured(), message: "Guest mode: saved products stay in this browser." }, context);
+    const account = { authenticated: true, user: context.user, identityAvailable: true, authAvailable: authConfigured() };
+    if (!storageConfigured()) return authResponse({ ...account, syncAvailable: false, message: "Account storage is not configured. Your browser shortlist still works." }, context, 503);
+    return authResponse({ ...account, syncAvailable: true, state: await readAccountState(context.user.id) }, context);
+  } catch (error) { return authFailure(error, context?.headers); }
 }
 
 export async function PUT(request: Request) {
-  if (!isSameOriginRequest(request)) return reply({ error: "Same-origin requests are required." }, 403);
-  const user = await identity();
-  if (!user) return reply({ error: "Sign in to sync an account." }, 401);
-  if (!allowAccountMutation(user.userId)) return reply({ error: "Too many account updates. Try again in a minute." }, 429);
-  if (!storageConfigured()) return reply({ error: "Account sync is not configured." }, 503);
+  let context: AuthContext | undefined;
   try {
+    if (!isSameOriginRequest(request)) throw new HttpError("Same-origin account requests are required.", 403);
+    context = await resolveUser(request);
+    if (!context.user) throw new HttpError("Sign in to sync your account.", 401);
+    if (!allowAccountMutation(context.user.id)) throw new HttpError("Too many account updates. Try again in a minute.", 429);
+    if (!storageConfigured()) throw new HttpError("Account storage is not configured.", 503);
     const parsed = accountStateSchema.safeParse(await readBoundedJson(request));
-    if (!parsed.success) return reply({ error: "Account data is invalid. Check saved products and preferences." }, 400);
-    await writeAccountState(user.userId, parsed.data);
-    return reply({ saved: true, state: parsed.data });
+    if (!parsed.success) throw new HttpError("Account data is invalid. Check saved products and preferences.", 400);
+    await writeAccountState(context.user.id, parsed.data);
+    return authResponse({ saved: true, state: parsed.data }, context);
   } catch (error) {
-    if (error instanceof BodyTooLargeError) return reply({ error: "Account data is too large." }, 413);
-    return reply({ error: error instanceof SyntaxError ? "Invalid JSON." : "Account storage could not be reached. Your browser data is unchanged." }, error instanceof SyntaxError ? 400 : 503);
+    if (error instanceof BodyTooLargeError) error = new HttpError("Account data is too large.", 413);
+    if (error instanceof SyntaxError) error = new HttpError("Invalid JSON.", 400);
+    return authFailure(error, context?.headers);
   }
 }
 
 export async function DELETE(request: Request) {
-  if (!isSameOriginRequest(request)) return reply({ error: "Same-origin requests are required." }, 403);
-  const user = await identity();
-  if (!user) return reply({ error: "Sign in to delete account data." }, 401);
-  if (!allowAccountMutation(user.userId)) return reply({ error: "Too many account updates. Try again in a minute." }, 429);
-  if (!storageConfigured()) return reply({ error: "Account storage is not configured." }, 503);
+  let context: AuthContext | undefined;
   try {
-    await deleteAccountState(user.userId);
-    return reply({ deleted: true, message: "Your Velora account data was deleted. Your ChatGPT account is unchanged." });
-  } catch {
-    return reply({ error: "Account data could not be deleted. Try again when storage is available." }, 503);
-  }
+    if (!isSameOriginRequest(request)) throw new HttpError("Same-origin account requests are required.", 403);
+    context = await resolveUser(request);
+    if (!context.user) throw new HttpError("Sign in to delete your account.", 401);
+    if (!allowAccountMutation(context.user.id)) throw new HttpError("Too many account updates. Try again in a minute.", 429);
+    if (!storageConfigured()) throw new HttpError("Account storage is not configured.", 503);
+    await deleteAccountState(context.user.id);
+    try { await deleteSupabaseIdentity(context.user); }
+    catch { throw new HttpError("Your stored Velora data was deleted, but deletion of your sign-in account could not be confirmed. If you can still sign in, retry to finish deleting it.", 503); }
+    clearSession(context.headers, request);
+    return authResponse({ deleted: true, message: context.user.provider === "supabase" ? "Your Velora account and associated personal data were deleted." : "Your Velora data was deleted. Your ChatGPT account is unchanged." }, context);
+  } catch (error) { return authFailure(error, context?.headers); }
 }

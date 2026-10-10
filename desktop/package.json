@@ -1,8 +1,8 @@
 {
   "name": "velora-desktop",
   "productName": "Velora",
-  "version": "0.1.1",
-  "description": "Velora — a thoughtful shopping companion for macOS",
+  "version": "0.2.0",
+  "description": "Velora \u2014 a thoughtful shopping companion for macOS",
   "main": "main.cjs",
   "private": true,
   "author": "Velora",

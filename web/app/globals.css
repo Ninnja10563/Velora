@@ -2935,3 +2935,184 @@ button {
   left: 8px;
   right: auto;
 }
+
+/* Account and price monitoring extend the existing flat, neutral interface. */
+.account-access {
+  margin: 20px 0;
+}
+.auth-options {
+  display: flex;
+  gap: 20px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 20px;
+}
+.auth-options button {
+  padding: 10px 0;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+.auth-options button.selected {
+  color: var(--text);
+  border-bottom-color: currentColor;
+}
+.auth-form {
+  display: grid;
+  gap: 14px;
+  max-width: 420px;
+}
+.auth-form .setting-field {
+  margin: 0;
+}
+.auth-form .primary-button,
+.auth-form .text-button {
+  justify-self: start;
+}
+.form-error {
+  color: #b43f36;
+  font-size: 14px;
+  line-height: 1.6;
+}
+[data-theme="dark"] .form-error {
+  color: #ffaca4;
+}
+.auth-confirmation {
+  width: min(100% - 48px, 480px);
+  margin: 10vh auto;
+  display: grid;
+  gap: 24px;
+}
+.auth-confirmation h1 {
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -1px;
+}
+.auth-confirmation .primary-button,
+.auth-confirmation .text-button {
+  justify-self: start;
+}
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0;
+  font-size: 14px;
+}
+.checkbox-field input {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+}
+.monitoring-section {
+  margin: 28px 0 40px;
+}
+.monitoring-section .section-heading {
+  align-items: start;
+  gap: 20px;
+}
+.monitoring-section .section-heading p {
+  margin-top: 8px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.monitoring-item {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--line);
+}
+.monitoring-row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+.monitoring-row > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.monitoring-row p,
+.price-notification p {
+  margin: 8px 0;
+  font-size: 14px;
+}
+.monitoring-row small,
+.price-notification small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.monitoring-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+}
+.target-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 14px;
+  margin: 20px 0;
+}
+.target-edit .setting-field {
+  margin: 0;
+  width: 180px;
+}
+.observation-history {
+  max-height: 260px;
+  overflow: auto;
+  margin: 20px 0;
+}
+.observation-history table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 14px;
+}
+.observation-history caption {
+  text-align: left;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+.observation-history td,
+.observation-history th {
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.price-notifications {
+  margin: 24px 0;
+}
+.price-notifications h3 {
+  margin-bottom: 8px;
+}
+.price-notification {
+  display: flex;
+  align-items: start;
+  gap: 14px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--line);
+}
+.price-notification > div {
+  flex: 1;
+}
+@media (max-width: 700px) {
+  .monitoring-row {
+    align-items: start;
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+  .monitoring-row > div:first-child {
+    flex-basis: 100%;
+  }
+  .monitoring-actions {
+    width: 100%;
+  }
+  .price-notification {
+    flex-wrap: wrap;
+  }
+  .price-notification > div {
+    min-width: 70%;
+  }
+}
+.product-name,
+.variant-label,
+.monitoring-row,
+.price-notification {
+  overflow-wrap: anywhere;
+}

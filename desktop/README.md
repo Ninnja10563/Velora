@@ -1,5 +1,7 @@
 # Velora for macOS
 
+The development milestone is **0.2.0**. The hosted shopping service and packaged desktop version are deployed separately.
+
 Velora Desktop is an Electron shell around the hosted Velora shopping application. It provides a native application menu, familiar keyboard shortcuts, a persistent isolated browser session, and retailer links that open in the default browser.
 
 The target is **macOS Apple Silicon arm64**, including M3, on macOS 13 or later. Electron 44 requires macOS 13+. [Electron 44 release notes](https://www.electronjs.org/blog/electron-44-0).
@@ -15,6 +17,14 @@ npm test
 npm start
 ```
 
+To use the local web application, start `npm run dev:local` in `web/`, then run:
+
+```sh
+VELORA_DESKTOP_ALLOW_LOCALHOST=true VELORA_DESKTOP_DEV_URL=http://127.0.0.1:3000 npm start
+```
+
+Both variables are required, and this override works only with an unpackaged Electron app. It accepts an exact HTTP loopback origin (`127.0.0.1`, `localhost`, or `[::1]`) and rejects network hosts, credentials, paths, and alternate protocols. The selected host and port must match the web server. Local development uses a separate persistent browser session; it cannot overwrite production login cookies. Packaged applications reject the override, and the production HTTPS navigation allowlist remains unchanged. See [the development guide](../docs/DEVELOPMENT.md) for local accounts and provider fixtures.
+
 To package on macOS:
 
 ```sh
@@ -29,7 +39,7 @@ Remote content has Node integration disabled, context isolation and the renderer
 
 The isolated preload observes actual top-level link gestures and sends only their target URL. The main process validates the sending frame and HTTPS URL. First-party outbound product links are resolved through the authenticated Electron session; the resulting retailer URL opens in the system browser without forwarding cookies. Other automatic external navigations are blocked. These choices follow Electron's [security guidance](https://www.electronjs.org/docs/latest/tutorial/security).
 
-The authentication origin list should be updated deliberately when the hosting provider changes its sign-in flow. Do not relax URL checks or disable web security to bypass authentication problems. Use the browser fallback while investigating unsupported sign-in flows.
+The authentication origin list should be updated deliberately when the hosting provider changes its sign-in flow. Email/password sessions stay in Velora's isolated browser. Email confirmation links opened in the system browser confirm the account there; return to Velora and sign in with the confirmed email and password. Browser and desktop sessions are separate. No custom URL scheme or credential handoff is implemented. Do not relax URL checks or disable web security to bypass authentication problems. Use the browser fallback while investigating unsupported sign-in flows.
 
 ## Release pipeline
 

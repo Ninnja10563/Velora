@@ -8,7 +8,7 @@ export const accountStateSchema = z.object({
   comparisonProductIds: z.array(productId).max(4).transform((ids) => [...new Set(ids)]),
   preferences: z.object({
     currency: z.enum(["USD", "AUD", "GBP", "EUR", "CAD"]),
-    location: z.string().trim().max(80),
+    location: z.string().trim().max(100),
     analyticsConsent: z.boolean(),
     theme: z.enum(["light", "dark", "system"]),
   }).strict(),
@@ -33,10 +33,11 @@ export function isAllowedAdmin(userId: string | null | undefined, allowlist: str
   return ids.includes(userId);
 }
 
-export function isPermittedDatabaseUrl(value: string): boolean {
+export function isPermittedDatabaseUrl(value: string, allowLoopback = false): boolean {
   try {
     const url = new URL(value);
-    return url.protocol === "https:" && !url.username && !url.password && url.pathname === "/" && !url.search && !url.hash;
+    const transport = url.protocol === "https:" || (allowLoopback && url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname));
+    return transport && !url.username && !url.password && url.pathname === "/" && !url.search && !url.hash;
   } catch {
     return false;
   }

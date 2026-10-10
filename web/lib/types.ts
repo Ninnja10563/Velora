@@ -1,5 +1,6 @@
 export const categoryIds = ["electronics", "computers", "phones", "home", "fashion", "beauty", "fitness", "office", "travel", "essentials"] as const;
 export type CategoryId = (typeof categoryIds)[number];
+export type DataStatus = "demo" | "live" | "cached";
 
 export interface ProductOffer {
   id: string;
@@ -8,8 +9,11 @@ export interface ProductOffer {
   currency: string;
   url: string;
   affiliateUrl?: string;
-  availability: "unknown";
-  lastChecked: null;
+  availability: "unknown" | "in_stock" | "out_of_stock" | "preorder";
+  lastChecked: string | null;
+  status?: DataStatus;
+  shipping?: number | null;
+  delivery?: string | null;
 }
 
 export interface Product {
@@ -24,14 +28,16 @@ export interface Product {
   price: number;
   currency: string;
   variant: string;
+  model?: string | null;
   specs: Record<string, string>;
   tags: string[];
   pros: string[];
   cons: string[];
   offers: ProductOffer[];
-  source: { name: string; url: string; status: "demo"; lastChecked: null };
-  rating: null;
-  reviewCount: null;
+  source: { name: string; url: string; status: DataStatus; lastChecked: string | null };
+  attributeSources?: Record<string, { url: string; lastChecked: string; kind: "retailer" | "manufacturer" }>;
+  rating: number | null;
+  reviewCount: number | null;
   warranty: string | null;
   returnPolicy: string | null;
 }
@@ -49,7 +55,10 @@ export interface SearchInput {
   brand?: string;
   priorities?: string[];
   currency?: string;
+  location?: string;
   analyticsConsent?: boolean;
+  /** Provider-only keywords; never accepted from the public request without validation. */
+  retrievalQuery?: string;
 }
 
 export interface SearchIntent {
@@ -64,7 +73,9 @@ export interface SearchResult {
   summary: string;
   clarification?: string;
   intent: SearchIntent;
-  mode: "demo";
+  mode: "demo" | "live" | "cached";
+  provider?: string;
+  assistantMode?: "local" | "openai" | "http";
   warnings: string[];
   searchId?: string;
 }
@@ -72,7 +83,8 @@ export interface SearchResult {
 /** External providers must return normalized facts, never prose-generated product facts. */
 export interface ProductProvider {
   readonly id: string;
-  readonly mode: "demo" | "live";
+  readonly mode: "demo" | "live" | "unconfigured";
   search(input: SearchInput): Promise<Product[]>;
+  getById(id: string, options?: { refresh?: boolean }): Promise<Product | null>;
   health(): Promise<{ available: boolean; detail: string }>;
 }

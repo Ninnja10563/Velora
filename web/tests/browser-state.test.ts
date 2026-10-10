@@ -12,11 +12,12 @@ const preferences = {
   theme: "light",
 };
 
-test("browser shortlists accept catalog IDs and reject corrupt or stale records", () => {
+test("browser shortlists accept safe retailer IDs and reject corrupt or unsafe records", () => {
   assert.deepEqual(
     validateBrowserState("velora-saved", [firstId, secondId, firstId]),
     [firstId, secondId],
   );
+  assert.deepEqual(validateBrowserState("velora-saved", ["ebay_example-item"]), ["ebay_example-item"]);
   assert.deepEqual(validateBrowserState("velora-compare", [firstId]), [
     firstId,
   ]);
@@ -25,7 +26,7 @@ test("browser shortlists accept catalog IDs and reject corrupt or stale records"
     "[]",
     {},
     [null],
-    ["missing-product"],
+    ["../unsafe-product"],
     [firstId, { id: secondId }],
   ]) {
     assert.equal(validateBrowserState("velora-saved", value), null);
@@ -100,7 +101,7 @@ test("browser preferences never coerce malformed consent or currency", () => {
   );
 });
 
-test("browser watchlists require known products and finite positive target prices", () => {
+test("browser watchlists require safe product identifiers and finite positive target prices", () => {
   assert.deepEqual(
     validateBrowserState("velora-watchlist", [{ id: firstId, target: 99.95 }]),
     [{ id: firstId, target: 99.95 }],
@@ -112,7 +113,7 @@ test("browser watchlists require known products and finite positive target price
     );
   }
   assert.equal(
-    validateBrowserState("velora-watchlist", [{ id: "unknown", target: 100 }]),
+    validateBrowserState("velora-watchlist", [{ id: "https://unsafe.test/item", target: 100 }]),
     null,
   );
   assert.equal(

@@ -1,6 +1,6 @@
 {
   "name": "velora",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -16,7 +16,16 @@
     "build:next": "next build",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "doctor": "node scripts/doctor.mjs",
+    "dev:local": "next dev --hostname 127.0.0.1 --port 3000",
+    "start:next": "next start --hostname 127.0.0.1 --port 3000",
+    "local:env": "node scripts/local-env.mjs",
+    "local:start": "npx --yes supabase@2.120.0 start",
+    "local:stop": "npx --yes supabase@2.120.0 stop",
+    "local:reset": "npx --yes supabase@2.120.0 db reset --local",
+    "test:integration": "playwright test --config playwright.integration.config.ts",
+    "test:db": "node --test --test-concurrency=1 database/tests/*.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -47,6 +56,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
     "@cloudflare/workers-types": "4.20260515.1",
+    "@electric-sql/pglite": "0.5.8",
     "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",

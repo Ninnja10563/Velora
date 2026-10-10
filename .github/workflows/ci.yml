@@ -21,9 +21,17 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      - name: Execute PostgreSQL migrations and monitoring invariants
+        run: npm run test:db
       - run: npm run build
+      - name: Build native Next.js production application
+        run: npm run build:next
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+        env:
+          CI: 'true'
+      - name: Exercise synthetic provider and auth protocols
+        run: npm run test:integration
         env:
           CI: 'true'
       - uses: actions/upload-artifact@v4

@@ -33,6 +33,31 @@ test("configuration rejects insecure sites and wildcard authentication origins",
   assert.throws(() => createNavigationPolicy({ siteUrl: config.siteUrl, trustedAuthOrigins: ["https://auth.openai.com/path"] }));
 });
 
+test("development URL requires explicit opt-in and is impossible in packaged builds", () => {
+  const developmentUrl = "http://127.0.0.1:3000";
+  assert.throws(() => createNavigationPolicy(config, { developmentUrl, allowLocalhost: true, isPackaged: true }));
+  assert.throws(() => createNavigationPolicy(config, { developmentUrl, isPackaged: false }));
+  assert.throws(() => createNavigationPolicy(config, { developmentUrl, allowLocalhost: true }));
+  for (const value of ["http://192.168.1.2:3000", "http://0.0.0.0:3000", "http://localhost.attacker.example:3000", "https://localhost:3000", "http://user@localhost:3000", "http://localhost:3000/path", "http://2130706433:3000", "file:///tmp/app"]) {
+    assert.throws(() => createNavigationPolicy(config, { developmentUrl: value, allowLocalhost: true, isPackaged: false }));
+  }
+});
+
+test("development navigation stays on the selected loopback origin and keeps external HTTPS rules", () => {
+  const local = createNavigationPolicy(config, { developmentUrl: "http://127.0.0.1:3000", allowLocalhost: true, isPackaged: false });
+  assert.equal(local.isDevelopment, true);
+  assert.equal(local.canNavigate("http://127.0.0.1:3000/auth/confirm?token_hash=fixture"), true);
+  assert.equal(local.isOutbound("http://127.0.0.1:3000/api/outbound?product=p1"), true);
+  assert.equal(local.canNavigate("http://127.0.0.1:4318"), false);
+  assert.equal(local.canNavigate("http://localhost:3000"), false);
+  assert.equal(local.canNavigate(config.siteUrl), false);
+  assert.equal(local.canNavigate("https://auth.openai.com/authorize"), true);
+  assert.equal(local.canDownloadExport("blob:http://127.0.0.1:3000/id", "application/json", "velora-my-data.json"), true);
+  assert.equal(parseHttpsUrl("http://127.0.0.1:3000"), null);
+  assert.equal(policy.isDevelopment, false);
+  assert.equal(config.siteUrl, "https://velora-shopping-finder.ninnja10563.chatgpt.site");
+});
+
 test("downloads permit only the first-party JSON data export blob", () => {
   const blob = `blob:${policy.siteOrigin}/127a0e99-e983-47d2-9f7c-136b1eacef2a`;
   assert.equal(policy.canDownloadExport(blob, "application/json", "velora-my-data.json"), true);
@@ -71,4 +96,24 @@ test("preload forwards real outbound gestures and rejects synthetic events", () 
   assert.deepEqual(messages[0], ["velora:link-gesture", "https://retailer.example/product"]);
   assert.equal(click(`${policy.siteOrigin}/api/outbound?product=p1`).prevented, true);
   assert.equal(messages.length, 2);
+});
+
+test("local preload relays only selected-origin outbound HTTP links", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "preload.cjs"), "utf8");
+  const listeners = {};
+  const messages = [];
+  const window = { addEventListener: (name, listener) => { listeners[name] = listener; } };
+  window.top = window;
+  class Anchor { constructor(href) { this.href = href; } }
+  vm.runInNewContext(source, {
+    require: () => ({ ipcRenderer: { send: (...args) => messages.push(args) } }),
+    process: { argv: ["--velora-site-origin=http://127.0.0.1:3000"] },
+    window, location: { origin: "http://127.0.0.1:3000" }, HTMLAnchorElement: Anchor, URL,
+  });
+  const click = (href) => listeners.click({ isTrusted: true, button: 0, composedPath: () => [new Anchor(href)], preventDefault() {}, stopImmediatePropagation() {} });
+  click("http://127.0.0.1:3000/api/outbound?product=fixture");
+  click("http://retailer.example/product");
+  click("http://127.0.0.1:54321/api/outbound?product=fixture");
+  assert.equal(messages.length, 1);
+  assert.deepEqual(messages[0], ["velora:link-gesture", "http://127.0.0.1:3000/api/outbound?product=fixture"]);
 });

@@ -2,13 +2,15 @@
 
 A shopping companion that turns a need and a budget into an explainable product shortlist.
 
+- [Development setup](docs/DEVELOPMENT.md)
+- [Implemented features and remaining production requirements](docs/READINESS.md)
 - [Web application source and configuration](web/README.md)
 - [macOS desktop setup and release process](desktop/README.md)
 - [Download desktop releases](https://github.com/Ninnja10563/Velora/releases)
 
 The desktop application targets Apple Silicon Macs, including M3, running macOS 13 or later. It opens the hosted Velora service in an isolated Electron window. Internet access and permission to access the hosted Site are required; packaging the app does not make a private Site public.
 
-The default product catalog is a clearly labeled demonstration. Live retailer data, approved affiliate identifiers, PostgreSQL sync, external AI interpretation, and verified network conversions require their respective configurations. See the web README for the actual supported behavior and limitations.
+Version 0.2 provides configurable OpenAI and eBay/approved-feed adapters, Supabase accounts, PostgreSQL price monitoring and in-app notifications. The default product catalog is a clearly labeled demonstration. Live retailer data, approved affiliate identifiers, PostgreSQL sync, external AI interpretation, and verified network conversions require their respective configurations. See the web README for the actual supported behavior and limitations.
 
 ## Repository
 

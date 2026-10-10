@@ -12,7 +12,7 @@ function handleLink(event) {
   try { url = new URL(anchor.href); } catch { return; }
   const outbound = url.origin === siteOrigin && url.pathname === "/api/outbound";
   if (!outbound && url.origin === siteOrigin) return;
-  if (url.protocol !== "https:" || url.username || url.password) {
+  if ((url.protocol !== "https:" && !(outbound && url.protocol === "http:")) || url.username || url.password) {
     event.preventDefault();
     return;
   }

@@ -4,7 +4,11 @@ const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require("electron")
 const path = require("node:path");
 const { createNavigationPolicy, parseHttpsUrl } = require("./navigation.cjs");
 const config = require("./app-config.json");
-const policy = createNavigationPolicy(config);
+const policy = createNavigationPolicy(config, {
+  developmentUrl: process.env.VELORA_DESKTOP_DEV_URL,
+  allowLocalhost: process.env.VELORA_DESKTOP_ALLOW_LOCALHOST === "true",
+  isPackaged: app.isPackaged,
+});
 let mainWindow;
 let openingExternal = false;
 
@@ -23,6 +27,7 @@ function mainPreferences() {
     webviewTag: false,
     navigateOnDragDrop: false,
     devTools: !app.isPackaged,
+    ...(policy.isDevelopment ? { partition: "persist:velora-development" } : {}),
     preload: path.join(__dirname, "preload.cjs"),
     additionalArguments: [`--velora-site-origin=${policy.siteOrigin}`],
   };
@@ -70,7 +75,7 @@ function createWindow() {
     mainWindow.show();
     const result = await dialog.showMessageBox(mainWindow, {
       type: "info", title: "Velora is having trouble connecting", message: "The shopping service could not be reached.",
-      detail: "Velora needs an internet connection and access to its hosted site. Sign-in may be required. You can try again or open the site in your browser.",
+      detail: policy.isDevelopment ? "Start the local web server configured in VELORA_DESKTOP_DEV_URL, then try again." : "Velora needs an internet connection and access to its hosted site. Sign-in may be required. You can try again or open the site in your browser.",
       buttons: ["Try again", "Open in browser", "Close"], defaultId: 0, cancelId: 2,
     });
     if (result.response === 0) void loadHome();
@@ -83,7 +88,7 @@ function createWindow() {
 
 ipcMain.on("velora:link-gesture", async (event, value) => {
   if (!mainWindow || openingExternal || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame || !policy.isSite(event.senderFrame.url)) return;
-  let url = parseHttpsUrl(value);
+  let url = policy.isSite(value) ? new URL(value) : parseHttpsUrl(value);
   if (!url) return;
   openingExternal = true;
   try {

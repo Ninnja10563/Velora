@@ -13,6 +13,7 @@ export const searchInputSchema = z.object({
   brand: z.string().trim().min(1).max(80).optional(),
   priorities: z.array(z.string().trim().min(1).max(60)).max(10).optional(),
   currency: z.enum(["USD", "AUD", "GBP", "EUR", "CAD"]).optional(),
+  location: z.string().trim().min(1).max(100).optional(),
   analyticsConsent: z.boolean().optional(),
 }).strict();
 
@@ -48,7 +49,7 @@ const MAX_BUCKETS = 5000;
 /** Single-instance guard. Use a shared edge limiter for multiple replicas in production. */
 export function enforceRateLimit(request: Request, scope: string, limit = 30, windowMs = 60000): void {
   const now = Date.now();
-  const ip = request.headers.get("cf-connecting-ip") || (process.env.TRUST_PROXY === "true" ? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() : undefined) || "anonymous";
+  const ip = (process.env.TRUST_CLOUDFLARE === "true" ? request.headers.get("cf-connecting-ip") : undefined) || (process.env.TRUST_PROXY === "true" ? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() : undefined) || "anonymous";
   const key = `${scope}:${ip.slice(0, 100)}`;
   const current = buckets.get(key);
   if (current && current.expires > now) {

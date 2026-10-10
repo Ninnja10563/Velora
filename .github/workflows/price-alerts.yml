@@ -1,0 +1,29 @@
+name: Check configured price alerts
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: velora-price-alert-job
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      VELORA_ALERT_JOB_URL: ${{ vars.VELORA_ALERT_JOB_URL }}
+      CRON_SECRET: ${{ secrets.VELORA_CRON_SECRET }}
+      SITES_SERVICE_TOKEN: ${{ secrets.VELORA_SITES_SERVICE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Invoke only an explicitly configured authenticated job
+        run: node web/scripts/run-alert-job.mjs

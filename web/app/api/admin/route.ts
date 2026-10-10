@@ -1,18 +1,14 @@
-import { getChatGPTUser } from "@/app/chatgpt-auth";
-import { isAllowedAdmin } from "@/lib/account-validation";
-import { getAnalyticsSummary, trustedIdentityEnabled } from "@/lib/storage";
+import { isAllowedAdmin } from "../../../lib/account-validation.ts";
+import { getAnalyticsSummary } from "../../../lib/storage.ts";
+import { authFailure, authResponse, resolveUser, type AuthContext } from "../../../lib/auth.ts";
+import { HttpError } from "../../../lib/security.ts";
 
 export const dynamic = "force-dynamic";
-
-export async function GET() {
-  const headers = { "Cache-Control": "private, no-store", "Vary": "Cookie, oai-authenticated-user-id" };
-  const user = trustedIdentityEnabled() ? await getChatGPTUser() : null;
-  if (!user || !isAllowedAdmin(user.userId, process.env.ADMIN_USER_IDS)) {
-    return Response.json({ error: "Administrator access required." }, { status: 403, headers });
-  }
+export async function GET(request: Request) {
+  let context: AuthContext | undefined;
   try {
-    return Response.json(await getAnalyticsSummary(), { headers });
-  } catch {
-    return Response.json({ error: "Analytics storage is unavailable. No metrics have been substituted." }, { status: 503, headers });
-  }
+    context = await resolveUser(request);
+    if (!context.user || !isAllowedAdmin(context.user.id, process.env.ADMIN_USER_IDS)) throw new HttpError("Administrator access required.", 403);
+    return authResponse(await getAnalyticsSummary(), context);
+  } catch (error) { return authFailure(error, context?.headers); }
 }

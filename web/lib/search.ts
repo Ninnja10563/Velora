@@ -1,8 +1,17 @@
 import { categories, products } from "./catalog.ts";
-import { deduplicateProducts, inferIntent, productProvider } from "./providers.ts";
+import { deduplicateProducts, getAssistantMode, inferIntent, productProvider } from "./providers.ts";
 import type { CategoryId, Product, SearchInput, SearchIntent, SearchResult } from "./types.ts";
 
 const kindRules: { kind: string; category: CategoryId; pattern: RegExp }[] = [
+  { kind: "phone case", category: "phones", pattern: /\b(?:phone|iphone|pixel) cases?\b/i },
+  { kind: "keyboard", category: "office", pattern: /\bkeyboards?\b/i },
+  { kind: "tablet", category: "computers", pattern: /\btablets?|ipads?\b/i },
+  { kind: "speaker", category: "electronics", pattern: /\bspeakers?\b/i },
+  { kind: "television", category: "electronics", pattern: /\btelevisions?|tvs?\b/i },
+  { kind: "smartwatch", category: "electronics", pattern: /\bsmartwatches?\b/i },
+  { kind: "printer", category: "office", pattern: /\bprinters?\b/i },
+  { kind: "router", category: "computers", pattern: /\brouters?\b/i },
+  { kind: "suitcase", category: "travel", pattern: /\bsuitcases?\b/i },
   { kind: "headphones", category: "electronics", pattern: /\b(headphones?|headsets?|earphones?|over[ -]ear)\b/i },
   { kind: "earbuds", category: "electronics", pattern: /\b(earbuds?|in[ -]ear|beats fit pro)\b/i },
   { kind: "laptop", category: "computers", pattern: /\b(laptops?|notebooks?|macbooks?|tuf|loq)\b/i },
@@ -77,7 +86,7 @@ function requestedModel(query: string): { name: string; category: CategoryId; br
   const families: { pattern: RegExp; category: CategoryId; brand: string }[] = [
     { pattern: /\biphone\s?\d+[a-z]?(?:\s+(?:pro|max|plus|mini|air))*/i, category: "phones", brand: "Apple" },
     { pattern: /\bpixel\s?\d+[a-z]?(?:\s+(?:pro|xl|fold))*/i, category: "phones", brand: "Google" },
-    { pattern: /\bgalaxy\s?[asz]\s?\d+[a-z]?(?:\s+(?:ultra|plus|fe|fold|flip))*/i, category: "phones", brand: "Samsung" },
+    { pattern: /\bgalaxy\s?[asz]\s?\d+[a-z]?(?:\s*(?:ultra|plus|fe|fold|flip|\+))*/i, category: "phones", brand: "Samsung" },
     { pattern: /\bwh[ -]?(?:\d{3,4}xm\d|ch\d+[a-z]?)\b/i, category: "electronics", brand: "Sony" },
     { pattern: /\bquietcomfort(?:\s+(?:ultra|45|35|headphones|earbuds))*/i, category: "electronics", brand: "Bose" },
     { pattern: /\bmacbook\s+(?:air|pro)\b/i, category: "computers", brand: "Apple" },
@@ -90,6 +99,13 @@ function requestedModel(query: string): { name: string; category: CategoryId; br
     if (match) return { name: match[0], category: family.category, brand: family.brand };
   }
   return undefined;
+}
+
+function matchesRequestedModel(product: Product, requested: ReturnType<typeof requestedModel>): boolean {
+  if (!requested) return true;
+  const actual = requestedModel(product.model || "") || requestedModel(product.name);
+  const identity = (name: string) => normalize(name.replace(/\+/g, " plus ").replace(/\s+headphones\b/gi, ""));
+  return actual ? identity(actual.name) === identity(requested.name) : normalize(product.name).includes(identity(requested.name));
 }
 
 function capacityInGb(specification: string): number | undefined {
@@ -106,31 +122,47 @@ function excludedFeatures(input: SearchInput): string[] {
   }).map(rule => rule.tag);
 }
 
-function mentionsMultipleChoices(query: string): boolean {
+function mentionsMultipleChoices(query: string, catalog: Product[]): boolean {
   const normalizedQuery = normalize(query);
-  const mentionedModels = products.filter(product => {
+  const mentions: { start: number; end: number; name: string }[] = [];
+  for (const product of catalog) {
     const family = product.name.replace(/\s+Headphones$/i, "");
     const withoutBrand = family.toLowerCase().startsWith(`${product.brand.toLowerCase()} `) ? family.slice(product.brand.length + 1) : family;
-    return [family, withoutBrand].some(alias => normalize(alias).length >= 5 && normalizedQuery.includes(normalize(alias)));
-  });
-  if (mentionedModels.length > 1) return true;
+    for (const alias of new Set([normalize(family), normalize(withoutBrand)])) {
+      if (alias.length < 5) continue;
+      let start = normalizedQuery.indexOf(alias);
+      while (start >= 0) {
+        mentions.push({ start, end: start + alias.length, name: normalize(product.model || product.name) });
+        start = normalizedQuery.indexOf(alias, start + alias.length);
+      }
+    }
+  }
+  // A base name inside one longer model mention is not a second selection.
+  const distinct = mentions.filter(mention => !mentions.some(other => other.start <= mention.start && other.end >= mention.end && other.end - other.start > mention.end - mention.start));
+  if (new Set(distinct.map(mention => mention.name)).size > 1) return true;
   if (!/\b(compare|comparison|versus|vs|or)\b/i.test(query)) return false;
-  const brands = new Set(products.filter(product => {
+  const brands = new Set(catalog.filter(product => {
     const escaped = product.brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return !excludesBrand(query, product.brand) && new RegExp(`\\b${escaped}\\b`, "i").test(query);
   }).map(product => product.brand));
   return brands.size > 1;
 }
 
-function parseIntent(input: SearchInput): SearchIntent & { kind?: string; exactId?: string; brand?: string } {
+function parseIntent(input: SearchInput, catalog: Product[] = products): SearchIntent & { kind?: string; exactId?: string; brand?: string } {
   const explicitCategory = categories.find(category => category.id === input.category);
-  const rule = kindRules.find(rule => rule.kind === "backpack" && rule.pattern.test(input.query)) || kindRules.find(rule => rule.pattern.test(input.query));
+  const knownRule = kindRules.find(rule => rule.kind === "backpack" && rule.pattern.test(input.query)) || kindRules.find(rule => rule.pattern.test(input.query));
+  const dynamicType = catalog.flatMap(product => product.tags.map(tag => ({ tag, category: product.category }))).find(({ tag }) => {
+    if (needRules.some(rule => rule.pattern.test(tag)) || categories.some(category => category.id === tag || category.name.toLowerCase() === tag) || tag.length < 3) return false;
+    const phrase = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`\\b${phrase}s?\\b`, "i").test(`${input.query} ${input.retrievalQuery || ""}`);
+  });
+  const rule = knownRule || (dynamicType ? { kind: dynamicType.tag, category: dynamicType.category } : undefined);
   const namedCategory = categories.find(category => normalize(category.name) === normalize(input.query) || category.id === input.query.toLowerCase());
   const categoryHints: [RegExp, CategoryId][] = [[/\b(home office|workspace|desk setup|office|productivity)\b/i, "office"], [/\b(computers|gaming setup)\b/i, "computers"], [/\b(electronics|tech)\b/i, "electronics"], [/\b(home|kitchen)\b/i, "home"], [/\b(fashion|clothes|clothing)\b/i, "fashion"], [/\b(beauty|personal care)\b/i, "beauty"], [/\b(fitness|sports|workout gear)\b/i, "fitness"], [/\b(travel gear|luggage)\b/i, "travel"], [/\beveryday essentials\b/i, "essentials"]];
   const broadCategory = categoryHints.find(([pattern]) => pattern.test(input.query))?.[1];
   const model = requestedModel(input.query);
-  const exact = products.find(product => normalize(input.query).includes(normalize(product.name)));
-  const queryBrand = products.find(product => !excludesBrand(input.query, product.brand) && new RegExp(`\\b${product.brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(input.query))?.brand || (/\b(macbook|iphone)\b/i.test(input.query) ? "Apple" : /\bpixel\b/i.test(input.query) ? "Google" : /\bgalaxy\b/i.test(input.query) ? "Samsung" : undefined);
+  const exact = catalog.find(product => normalize(input.query).includes(normalize(product.name)));
+  const queryBrand = catalog.find(product => !excludesBrand(input.query, product.brand) && new RegExp(`\\b${product.brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(input.query))?.brand || (/\b(macbook|iphone)\b/i.test(input.query) ? "Apple" : /\bpixel\b/i.test(input.query) ? "Google" : /\bgalaxy\b/i.test(input.query) ? "Samsung" : undefined);
   const provided = (input.priorities || []).map(priority => needRules.find(rule => rule.pattern.test(priority))?.tag || priority.toLowerCase());
   const inferred = needRules.filter(rule => rule.pattern.test(input.query)).map(rule => rule.tag);
   const queryBudget = extractBudget(input.query);
@@ -138,7 +170,7 @@ function parseIntent(input: SearchInput): SearchIntent & { kind?: string; exactI
   return {
     query: input.query, category: explicitCategory?.id || rule?.category || model?.category || exact?.category || namedCategory?.id || broadCategory,
     budget, priorities: [...new Set([...provided, ...inferred])],
-    kind: rule?.kind, exactId: exact?.id, brand: input.brand || queryBrand || model?.brand,
+    kind: rule?.kind, exactId: exact?.source.status === "demo" ? exact.id : undefined, brand: input.brand || queryBrand || model?.brand,
   };
 }
 
@@ -150,27 +182,28 @@ function requestedCurrency(input: SearchInput): string {
   return input.currency || "USD";
 }
 
-export function rankProducts(input: SearchInput, catalog: Product[] = products): SearchResult {
-  const parsed = parseIntent(input);
+export function rankProducts(input: SearchInput, catalog: Product[] = products, providerMode: "demo" | "live" = catalog.every(product => product.source.status === "demo") ? "demo" : "live"): SearchResult {
+  const demo = providerMode === "demo";
+  const parsed = parseIntent(input, catalog);
   const { kind, exactId, brand, ...intent } = parsed;
-  const warnings = ["Demo catalog: prices and specifications are illustrative, not live retailer data. Check the manufacturer before buying.", "Reviews, stock, delivery, warranty, and price history have not been verified. No reliability or review-quality score is assigned."];
-  const result: SearchResult = { products: [], summary: "", intent, mode: "demo", warnings };
+  const warnings = demo ? ["Demo catalog: prices and specifications are illustrative, not live retailer data. Check the manufacturer before buying.", "Reviews, stock, delivery, warranty, and price history have not been verified. No reliability or review-quality score is assigned."] : ["Prices and product details come from the identified provider. Cached records retain their original observation timestamps; check the retailer before purchasing.", "Prices exclude taxes and any delivery cost not explicitly provided. Independent reliability and review quality have not been assessed."];
+  const result: SearchResult = { products: [], summary: "", intent, mode: demo ? "demo" : catalog.length && catalog.every(product => product.source.status === "cached") ? "cached" : "live", warnings };
   const excluded = excludedFeatures(input);
   if (excluded.length) {
     // A missing positive tag does not prove that a product lacks that feature.
     // Do not reinterpret a negative requirement as a positive recommendation.
     result.intent.priorities = intent.priorities.filter(priority => !excluded.includes(priority));
-    result.summary = `You asked to avoid ${excluded.join(", ")}. I cannot verify that negative requirement from this sample catalog.`;
+    result.summary = `You asked to avoid ${excluded.join(", ")}. I cannot verify that negative requirement from the available product records.`;
     result.clarification = `The catalog does not consistently document the absence of ${excluded.join(", ")}, so I have not recommended a product. Check manufacturer specifications or try a different requirement.`;
     return result;
   }
-  if (mentionsMultipleChoices(input.query)) {
+  if (mentionsMultipleChoices(input.query, catalog)) {
     result.summary = "You mentioned multiple shopping options. A single-model search would leave out part of your request.";
     result.clarification = "Search for each model separately and select Compare on its card. The comparison page will show your selected products side by side.";
     return result;
   }
   const unsupportedType = /\b(keyboards?|tablets?|televisions?|tvs?|dishwashers?|toasters?|mattresses?|drones?|bicycles?|printers?|routers?|perfumes?|speakers?|desktops?|fridges?|refrigerators?|suitcases?|chargers?|smartwatches?|power ?banks?|(?:phone|iphone|pixel|laptop) cases?)\b/i.test(input.query);
-  if (unsupportedType) {
+  if (demo && unsupportedType) {
     result.summary = "That product type is not covered by this sample catalog yet.";
     result.clarification = "Try headphones, laptops, monitors, phones, office chairs, running shoes, or backpacks. A connected product feed can expand the selection.";
     return result;
@@ -181,7 +214,7 @@ export function rankProducts(input: SearchInput, catalog: Product[] = products):
     return result;
   }
   const currency = requestedCurrency(input);
-  if (currency !== "USD") {
+  if (demo && currency !== "USD") {
     result.summary = `This sample catalog has USD prices only. No ${currency} prices or exchange rates are available.`;
     result.clarification = "Switch the search currency to USD to explore the demo, or connect a product feed for your region.";
     return result;
@@ -198,13 +231,14 @@ export function rankProducts(input: SearchInput, catalog: Product[] = products):
   const requiredStorage = storage ? Number(storage[1]) * (storage[2].toLowerCase() === "tb" ? 1024 : 1) : undefined;
   const eligible = deduplicateProducts(catalog).filter(product =>
     product.category === intent.category && product.currency === currency &&
+    product.offers.some(offer => offer.currency === currency && offer.availability !== "out_of_stock") &&
     (intent.budget === undefined || product.price <= intent.budget) &&
     (!kind || product.tags.includes(kind)) && (!exactId || product.id === exactId) &&
     !excludesBrand(input.query, product.brand) &&
     (!brand || product.brand.toLowerCase() === brand.toLowerCase()) &&
     hardTags.every(tag => product.tags.includes(tag)) &&
     (!gpu || normalize(product.specs.Graphics || "").includes(gpu)) &&
-    (!model || normalize(product.name).includes(normalize(model.name))) &&
+    matchesRequestedModel(product, model) &&
     (!chip || normalize(product.specs.Processor || "").endsWith(normalize(chip))) &&
     (requiredStorage === undefined || capacityInGb(product.specs.Storage || "") === requiredStorage) &&
     (!memory || Number.parseInt(product.specs.Memory || "0") >= Number(memory))
@@ -216,32 +250,49 @@ export function rankProducts(input: SearchInput, catalog: Product[] = products):
   const lowest = eligible.length ? Math.min(...eligible.map(product => product.price)) : 0;
   result.products = eligible.map((product, index) => {
     const matchedNeeds = matches(product);
-    const budgetText = intent.budget ? ` The sample price is within your $${intent.budget.toLocaleString("en-US")} USD limit.` : "";
+    const budgetText = intent.budget ? ` The ${demo ? "sample" : "listed"} price is within your ${intent.budget.toLocaleString("en-US")} ${currency} limit.` : "";
     return {
       ...product, matchedNeeds,
-      recommendation: index === 0 ? (matchedNeeds.length ? "Best match" : "Lowest sample price") : product.price === lowest ? "Budget pick" : "Worth comparing",
-      explanation: `${matchedNeeds.length ? `Matches ${matchedNeeds.join(", ")} in the sample catalog.` : "Matches your selected product category."}${budgetText} ${product.cons[0] ? `Trade-off: ${product.cons[0].charAt(0).toLowerCase()}${product.cons[0].slice(1)}.` : ""}`.trim(),
+      recommendation: index === 0 ? (matchedNeeds.length ? "Best match" : demo ? "Lowest sample price" : "Lowest listed price") : product.price === lowest ? "Budget pick" : "Worth comparing",
+      explanation: `${matchedNeeds.length ? `Matches ${matchedNeeds.join(", ")} in the ${demo ? "sample catalog" : "provider records"}.` : "Matches your selected product category."}${budgetText} ${product.cons[0] ? `Trade-off: ${product.cons[0].charAt(0).toLowerCase()}${product.cons[0].slice(1)}.` : ""}`.trim(),
     };
   });
   const unsupported = intent.priorities.filter(priority => !eligible.some(product => product.tags.includes(priority)));
-  if (unsupported.length) warnings.push(`No supporting sample evidence for: ${unsupported.join(", ")}. These needs have not been assumed to be satisfied.`);
+  if (unsupported.length) warnings.push(`No supporting ${demo ? "sample " : "provider "}evidence for: ${unsupported.join(", ")}. These needs have not been assumed to be satisfied.`);
   if (!eligible.length) {
-    result.summary = "No sample products meet all of these filters.";
+    result.summary = `No ${demo ? "sample " : "available "}products meet all of these filters.`;
     result.clarification = "Try another brand, remove a feature filter, or browse the category. Your budget has been kept unchanged.";
   } else {
-    result.summary = `Found ${eligible.length} ${eligible.length === 1 ? "sample match" : "sample matches"}${intent.budget ? ` within $${intent.budget.toLocaleString("en-US")} USD` : ""}. Ordered by matching stated needs, then lower sample price. Availability and real-world performance are unverified.`;
+    result.summary = `Found ${eligible.length} ${demo ? "sample " : ""}${eligible.length === 1 ? "match" : "matches"}${intent.budget ? ` within ${intent.budget.toLocaleString("en-US")} ${currency}` : ""}. Ordered by matching stated needs, then lower ${demo ? "sample" : "listed"} price. ${demo ? "Availability and real-world performance are unverified." : "See each offer for availability and its observation time."}`;
   }
   return result;
 }
 
 export async function searchProducts(input: SearchInput): Promise<SearchResult> {
-  const [catalog, inferred] = await Promise.all([productProvider.search(input), inferIntent(input)]);
+  const inferred = await inferIntent(input);
   const local = parseIntent(input);
-  // An AI-suggested broad category alone cannot turn an unknown product into unrelated results.
-  const merged: SearchInput = { ...input, priorities: [...new Set([...(input.priorities || []), ...(inferred.intent?.priorities || [])])].slice(0, 10) };
-  if (local.category && !input.category) merged.category = local.category;
-  const result = rankProducts(merged, catalog);
+  const assistantMode = getAssistantMode();
+  const demo = productProvider.mode === "demo";
+  // A tool call may narrow retrieval, but it cannot raise a known budget, change
+  // the user's currency, or replace original model/variant constraint checks.
+  const budget = local.budget ?? inferred.intent?.budget ?? undefined;
+  const merged: SearchInput = {
+    ...input, budget, currency: requestedCurrency(input),
+    priorities: [...new Set([...(input.priorities || []), ...(inferred.intent?.priorities || [])])].slice(0, 10),
+    category: input.category || local.category || (!demo ? inferred.intent?.category || undefined : undefined),
+    brand: input.brand || local.brand || inferred.intent?.brand || undefined,
+    retrievalQuery: inferred.intent?.query,
+  };
+  const catalog = await productProvider.search(merged);
+  const result = rankProducts(merged, catalog, demo ? "demo" : "live");
+  result.provider = productProvider.id;
+  result.assistantMode = assistantMode;
+  if (inferred.intent?.clarification && !local.category) {
+    result.products = [];
+    result.summary = "A little more detail is needed before recommending products.";
+    result.clarification = inferred.intent.clarification;
+  }
   if (inferred.warning) result.warnings.push(inferred.warning);
-  if (!process.env.AI_INTENT_ENDPOINT) result.warnings.push("Using local natural-language rules. No external AI or retailer API is connected.");
+  if (assistantMode === "local") result.warnings.push("Using local natural-language rules. No external AI is connected.");
   return result;
 }

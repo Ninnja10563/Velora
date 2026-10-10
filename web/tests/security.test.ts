@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { accountStateSchema, allowAccountMutation, BodyTooLargeError, isAllowedAdmin, isPermittedDatabaseUrl, isSameOriginRequest, readBoundedJson } from "../lib/account-validation.ts";
-import { getAnalyticsSummary, readAccountState, recordEvent, StorageUnavailableError } from "../lib/storage.ts";
+import { databaseRequest, getAnalyticsSummary, readAccountState, recordEvent, StorageUnavailableError } from "../lib/storage.ts";
 
 test("account writes reject cross-origin, opaque and missing origins", () => {
   const url = "https://velora.example/api/account";
@@ -58,6 +58,30 @@ test("account rate limit isolates users and resets after one minute", () => {
   assert.equal(allowAccountMutation(id, 100), false);
   assert.equal(allowAccountMutation(`${id}-other`, 100), true);
   assert.equal(allowAccountMutation(id, 60_100), true);
+});
+
+test("database transport refuses credential-bearing redirects and oversized response bodies", async () => {
+  const previousUrl = process.env.SUPABASE_URL;
+  const previousKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const previousFetch = globalThis.fetch;
+  process.env.SUPABASE_URL = "https://project.supabase.co";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "service-test-key";
+  try {
+    globalThis.fetch = async (_input, options) => {
+      assert.equal(options?.redirect, "error");
+      assert.equal(new Headers(options?.headers).get("apikey"), "service-test-key");
+      throw new TypeError("Redirect blocked");
+    };
+    await assert.rejects(() => databaseRequest("profiles"), StorageUnavailableError);
+    globalThis.fetch = async () => new Response(JSON.stringify({ value: "x".repeat(2_000_000) }));
+    await assert.rejects(() => databaseRequest("profiles"), StorageUnavailableError);
+    globalThis.fetch = async () => Response.json([{ user_id: "owner" }]);
+    assert.deepEqual(await databaseRequest("profiles"), [{ user_id: "owner" }]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousUrl === undefined) delete process.env.SUPABASE_URL; else process.env.SUPABASE_URL = previousUrl;
+    if (previousKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY; else process.env.SUPABASE_SERVICE_ROLE_KEY = previousKey;
+  }
 });
 
 test("analytics require explicit consent and distinguish clicks from confirmed conversions", async () => {

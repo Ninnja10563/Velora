@@ -1,13 +1,12 @@
 import { z } from "zod";
-import { products } from "./catalog.ts";
 
 // Browser storage is untrusted: old versions, manual edits and extensions can
 // leave valid JSON with a shape the UI cannot safely use.
-const catalogIds = new Set(products.map((product) => product.id));
 const productId = z
   .string()
+  .min(1)
   .max(120)
-  .refine((id) => catalogIds.has(id));
+  .regex(/^[a-zA-Z0-9_-]+$/);
 const amount = z.number().finite().positive().max(100_000);
 
 const schemas: Record<string, z.ZodTypeAny> = {

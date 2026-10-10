@@ -8,14 +8,14 @@ export class StorageUnavailableError extends Error {
 }
 
 export function storageConfigured(): boolean {
-  return Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_URL && isPermittedDatabaseUrl(process.env.SUPABASE_URL));
+  return Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_URL && isPermittedDatabaseUrl(process.env.SUPABASE_URL, process.env.ALLOW_LOCAL_SUPABASE === "true"));
 }
 
 export function trustedIdentityEnabled(): boolean {
   return process.env.TRUST_SITES_IDENTITY === "true";
 }
 
-async function databaseRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+export async function databaseRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (!storageConfigured()) throw new StorageUnavailableError();
   const root = process.env.SUPABASE_URL!.replace(/\/$/, "");
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -25,12 +25,24 @@ async function databaseRequest<T>(path: string, options: RequestInit = {}): Prom
   headers.set("Content-Type", "application/json");
   try {
     const response = await fetch(`${root}/rest/v1/${path}`, {
-      ...options, headers, cache: "no-store", signal: AbortSignal.timeout(6000),
+      ...options, headers, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(6000),
     });
     if (!response.ok) throw new StorageUnavailableError();
     if (response.status === 204 || response.headers.get("content-length") === "0") return undefined as T;
-    const text = await response.text();
-    return (text ? JSON.parse(text) : undefined) as T;
+    const reader = response.body?.getReader();
+    if (!reader) return undefined as T;
+    const decoder = new TextDecoder(); let text = ""; let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > 2_000_000) { await reader.cancel(); throw new StorageUnavailableError(); }
+        text += decoder.decode(value, { stream: true });
+      }
+      text += decoder.decode();
+      return (text ? JSON.parse(text) : undefined) as T;
+    } finally { reader.releaseLock(); }
   } catch {
     throw new StorageUnavailableError();
   }
@@ -46,13 +58,17 @@ export async function readAccountState(userId: string): Promise<AccountState | n
 
 export async function writeAccountState(userId: string, state: AccountState): Promise<void> {
   // Ownership comes from the authenticated request, never a client-supplied user ID.
-  await databaseRequest("profiles?on_conflict=user_id", {
-    method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-    body: JSON.stringify({ user_id: userId, updated_at: new Date().toISOString() }),
-  });
+  await ensureProfile(userId);
   await databaseRequest("user_state?on_conflict=user_id", {
     method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
     body: JSON.stringify({ user_id: userId, state: accountStateSchema.parse(state), updated_at: new Date().toISOString() }),
+  });
+}
+
+export async function ensureProfile(userId: string): Promise<void> {
+  await databaseRequest("profiles?on_conflict=user_id", {
+    method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({ user_id: userId, updated_at: new Date().toISOString() }),
   });
 }
 

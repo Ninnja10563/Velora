@@ -48,7 +48,13 @@ import {
   Leaf,
   CheckCheck,
 } from "lucide-react";
-import { products, categories } from "@/lib/catalog";
+import { categories } from "@/lib/catalog";
+import { useCatalog } from "./use-catalog";
+import { AccountAccess } from "./account-access";
+import {
+  PriceMonitoring,
+  type PriceMonitoringHandle,
+} from "./price-monitoring";
 import { validateBrowserState } from "@/lib/browser-state";
 import type { Product, RecommendedProduct } from "@/lib/types";
 type SearchResult = {
@@ -56,6 +62,7 @@ type SearchResult = {
   summary: string;
   clarification?: string;
   mode: string;
+  assistantMode?: "local" | "openai" | "http";
   searchId?: string;
   warnings: string[];
 };
@@ -70,6 +77,7 @@ type Watch = { id: string; target: number };
 type Account = {
   authenticated: boolean;
   identityAvailable?: boolean;
+  authAvailable?: boolean;
   user?: { id: string; displayName: string } | null;
   syncAvailable: boolean;
   message?: string;
@@ -104,6 +112,36 @@ const popularPrompts = [
   "Upgrade my home office",
   "Running shoes under $150",
 ];
+function primaryOffer(product: Product) {
+  return [...product.offers]
+    .filter(
+      (offer) =>
+        offer.currency === product.currency &&
+        offer.availability !== "out_of_stock",
+    )
+    .sort((a, b) => a.price - b.price)[0];
+}
+function priceLabel(product: Product) {
+  return product.source.status === "demo"
+    ? "Sample price"
+    : product.source.status === "cached"
+      ? "Cached price"
+      : "Retailer price";
+}
+function checkedLabel(product: Product) {
+  if (product.source.status === "demo")
+    return "Unverified sample — not a live offer";
+  return product.source.lastChecked
+    ? `Checked ${new Date(product.source.lastChecked).toLocaleString()}`
+    : "Last check unavailable";
+}
+function reviewLabel(product: Product) {
+  if (product.source.status === "demo")
+    return "Not verified in the demo catalog";
+  return product.rating !== null
+    ? `${product.rating}/5${product.reviewCount !== null ? ` from ${product.reviewCount} reviews` : " · review count unavailable"}`
+    : "Review data unavailable";
+}
 function money(price: number, currency = "USD") {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -258,6 +296,9 @@ export default function Velora() {
   >(null);
   const [watchProduct, setWatchProduct] = useState<Product | null>(null);
   const [target, setTarget] = useState("");
+  const [watchRemotely, setWatchRemotely] = useState(false);
+  const [watchBusy, setWatchBusy] = useState(false);
+  const [watchError, setWatchError] = useState("");
   const [account, setAccount] = useState<Account | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [refinement, setRefinement] = useState("");
@@ -267,9 +308,19 @@ export default function Velora() {
   const page = pathname.startsWith("/product/")
     ? "product"
     : pathname.split("/")[1] || "discover";
-  const activeProduct = products.find(
-    (p) => p.id === decodeURIComponent(pathname.split("/")[2] || ""),
+  const requestedProductId = pathname.split("/")[2] || "";
+  const catalog = useCatalog(
+    [
+      ...saved,
+      ...compare,
+      ...watches.map((w) => w.id),
+      ...(page === "product" ? [requestedProductId] : []),
+    ],
+    prefs.currency,
   );
+  const { products } = catalog;
+  const monitoringRef = useRef<PriceMonitoringHandle | null>(null);
+  const activeProduct = products.find((p) => p.id === requestedProductId);
   const notify = useCallback((text: string) => setToast(text), []);
   useEffect(() => {
     const close = (e: KeyboardEvent) => {
@@ -288,11 +339,14 @@ export default function Velora() {
     document.documentElement.dataset.theme = prefs.theme;
     document.documentElement.style.colorScheme = prefs.theme;
   }, [prefs.theme]);
-  useEffect(() => {
+  const refreshAccount = useCallback(() => {
     fetch("/api/account")
       .then((r) => r.json())
       .then((data) => setAccount(data as Account))
       .catch(() => setAccount({ authenticated: false, syncAvailable: false }));
+  }, []);
+  useEffect(() => {
+    refreshAccount();
     return () => abortRef.current?.abort();
   }, []);
   const nav = (path: string) => {
@@ -301,6 +355,12 @@ export default function Velora() {
     window.scrollTo({ top: 0, behavior: "instant" });
   };
   function toggleSave(id: string) {
+    if (!saved.includes(id) && saved.length >= 100) {
+      notify(
+        "Your shortlist holds up to 100 products. Remove one before adding another.",
+      );
+      return;
+    }
     setSaved((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
     notify(
       saved.includes(id)
@@ -360,6 +420,7 @@ export default function Velora() {
           category: cat === "all" ? undefined : cat,
           priorities,
           currency: prefs.currency,
+          location: prefs.location,
           analyticsConsent: prefs.analyticsConsent,
         }),
         signal: controller.signal,
@@ -372,6 +433,7 @@ export default function Velora() {
             : "Search is unavailable. Please try again.",
         );
       setResult(data);
+      catalog.merge(data.products);
       setChat((c) => [
         ...c,
         { role: "assistant", text: data.clarification || data.summary },
@@ -402,6 +464,7 @@ export default function Velora() {
     );
   };
   const featured = products
+    .filter((p) => p.currency === prefs.currency)
     .filter((p) =>
       ["electronics", "computers", "home", "fitness"].includes(p.category),
     )
@@ -421,9 +484,11 @@ export default function Velora() {
     return list;
   })();
   function outbound(p: Product, offerId?: string, source = "card") {
-    return `/api/outbound?product=${encodeURIComponent(p.id)}&offer=${encodeURIComponent(offerId || p.offers[0]?.id || "")}&source=${source}${prefs.analyticsConsent ? `&consent=true${result?.searchId ? `&searchId=${encodeURIComponent(result.searchId)}` : ""}` : ""}`;
+    return `/api/outbound?product=${encodeURIComponent(p.id)}&offer=${encodeURIComponent(offerId || primaryOffer(p)?.id || "")}&source=${source}${prefs.analyticsConsent ? `&consent=true${result?.searchId ? `&searchId=${encodeURIComponent(result.searchId)}` : ""}` : ""}`;
   }
   function startWatch(p: Product) {
+    setWatchError("");
+    setWatchRemotely(!!account?.authenticated && p.source.status !== "demo");
     setWatchProduct(p);
     setTarget(String(Math.floor(p.price * 0.85)));
   }
@@ -536,7 +601,9 @@ export default function Velora() {
           <p className="product-description">{product.description}</p>
           <div className="product-price-row">
             <strong>{money(product.price, product.currency)}</strong>
-            <span>Sample price · {product.currency}</span>
+            <span>
+              {priceLabel(product)} · {product.currency}
+            </span>
           </div>
           {"explanation" in product && (
             <p className="match-reason">{String(product.explanation)}</p>
@@ -894,7 +961,13 @@ export default function Velora() {
           <div className="topbar-actions">
             <span className="demo-tag">
               <span />
-              Demo catalog
+              {catalog.mode === "demo"
+                ? "Demo catalog"
+                : catalog.mode === "loading"
+                  ? "Loading catalog"
+                  : catalog.mode === "unavailable"
+                    ? "Catalog unavailable"
+                    : "Retailer catalog"}
             </span>
             <button
               className="icon-button"
@@ -1027,9 +1100,25 @@ export default function Velora() {
                     <h2>Worth a closer look.</h2>
                   </div>
                   <span className="section-caption">
-                    A few finds from our sample catalog
+                    {catalog.mode === "demo"
+                      ? "A few finds from our sample catalog"
+                      : "Explore products from the connected catalog"}
                   </span>
                 </div>
+                {catalog.loading && <p role="status">Loading products…</p>}
+                {catalog.error && (
+                  <p className="notice" role="status">
+                    {catalog.error}{" "}
+                    <button className="text-button" onClick={catalog.retry}>
+                      Retry catalog
+                    </button>
+                  </p>
+                )}
+                {!catalog.loading && !catalog.error && !featured.length && (
+                  <p className="data-note">
+                    Describe what you need above to search the retailer catalog.
+                  </p>
+                )}
                 <div className="product-grid">
                   {featured.map((p, i) => renderProductCard(p, i))}
                 </div>
@@ -1095,8 +1184,8 @@ export default function Velora() {
                   <LoaderCircle className="spin" size={30} />
                   <h2>Looking for your kind of perfect</h2>
                   <p>
-                    Matching your needs, checking your budget, comparing the
-                    sample catalog.
+                    Matching your needs, checking your budget, and comparing the
+                    available product information.
                   </p>
                 </div>
               ) : error ? (
@@ -1116,7 +1205,18 @@ export default function Velora() {
                       </span>
                       <p>{result.clarification || result.summary}</p>
                       <div className="summary-meta">
-                        <span>Demo catalog · sample prices</span>
+                        <span>
+                          {result.mode === "demo"
+                            ? "Demo catalog · sample prices"
+                            : "Retailer data · check each source timestamp"}
+                        </span>
+                        {result.assistantMode && (
+                          <span>
+                            {result.assistantMode === "local"
+                              ? "Local matching"
+                              : "AI-assisted matching"}
+                          </span>
+                        )}
                         <button onClick={() => setModal("method")}>
                           How we choose <CircleHelp size={13} />
                         </button>
@@ -1251,6 +1351,57 @@ export default function Velora() {
               )}
             </>
           )}
+          {["saved", "compare", "alerts"].includes(page) &&
+            catalog.unavailable.some((id) =>
+              (page === "saved"
+                ? saved
+                : page === "compare"
+                  ? compare
+                  : watches.map((w) => w.id)
+              ).includes(id),
+            ) && (
+              <div className="notice">
+                <div>
+                  <strong>Some saved products couldn’t be loaded.</strong>
+                  <p>
+                    The retailer may have removed them, or the product service
+                    may be unavailable. Your saved IDs are preserved.
+                  </p>
+                  <button className="text-button" onClick={catalog.retry}>
+                    Try loading again
+                  </button>
+                  {catalog.unavailable
+                    .filter((id) =>
+                      (page === "saved"
+                        ? saved
+                        : page === "compare"
+                          ? compare
+                          : watches.map((w) => w.id)
+                      ).includes(id),
+                    )
+                    .map((id) => (
+                      <p key={id}>
+                        {id}{" "}
+                        <button
+                          className="text-button"
+                          onClick={() => {
+                            if (page === "saved")
+                              setSaved((ids) => ids.filter((v) => v !== id));
+                            else if (page === "compare")
+                              setCompare((ids) => ids.filter((v) => v !== id));
+                            else
+                              setWatches((items) =>
+                                items.filter((w) => w.id !== id),
+                              );
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </p>
+                    ))}
+                </div>
+              </div>
+            )}
           {page === "saved" && (
             <>
               <PageIntro
@@ -1283,9 +1434,7 @@ export default function Velora() {
               {compare.length ? (
                 <>
                   <div className="comparison-top">
-                    <span>
-                      {compare.length} of 4 products selected · demo catalog
-                    </span>
+                    <span>{compare.length} of 4 products selected</span>
                     <button
                       className="text-button"
                       onClick={() => setCompare([])}
@@ -1331,7 +1480,7 @@ export default function Velora() {
                       <tbody>
                         {[
                           {
-                            label: "Sample price",
+                            label: "Price",
                             value: (p: Product) =>
                               money(p.price, p.currency) + ` ${p.currency}`,
                           },
@@ -1359,7 +1508,7 @@ export default function Velora() {
                           },
                           {
                             label: "Reviews & reliability",
-                            value: () => "Not verified in the demo catalog",
+                            value: (p: Product) => reviewLabel(p),
                           },
                           {
                             label: "Stock, delivery & returns",
@@ -1368,7 +1517,7 @@ export default function Velora() {
                           },
                           {
                             label: "Price last checked",
-                            value: () => "Unverified sample — not a live offer",
+                            value: (p: Product) => checkedLabel(p),
                           },
                           {
                             label: "Explore",
@@ -1379,7 +1528,7 @@ export default function Velora() {
                                 target="_blank"
                                 rel="noopener noreferrer sponsored"
                               >
-                                Visit {p.offers[0]?.retailer || "source"}{" "}
+                                Visit {primaryOffer(p)?.retailer || "source"}{" "}
                                 <ExternalLink size={14} />
                               </a>
                             ),
@@ -1399,9 +1548,9 @@ export default function Velora() {
                     </table>
                   </div>
                   <p className="data-note">
-                    Every specification and price above is sample data. Review
-                    the exact configuration and current terms on the source
-                    website before purchasing.
+                    Source labels distinguish sample data from retailer
+                    observations. Review the exact configuration and current
+                    terms on the source website before purchasing.
                   </p>
                 </>
               ) : (
@@ -1429,7 +1578,10 @@ export default function Velora() {
                       {activeProduct.imageKind === "category"
                         ? "Category photograph for illustration only"
                         : "Product image"}{" "}
-                      · Demo catalog
+                      ·{" "}
+                      {activeProduct.source.status === "demo"
+                        ? "Demo catalog"
+                        : activeProduct.source.name}
                     </span>
                   </div>
                   <div className="detail-main">
@@ -1443,23 +1595,33 @@ export default function Velora() {
                     </span>
                     <div className="detail-price">
                       {money(activeProduct.price, activeProduct.currency)}
-                      <span>Sample price · {activeProduct.currency}</span>
+                      <span>
+                        {priceLabel(activeProduct)} · {activeProduct.currency}
+                      </span>
                     </div>
                     <p className="data-note">
-                      A sample price for exploring this demo. Current pricing
-                      and availability haven’t been verified.
+                      {activeProduct.source.status === "demo"
+                        ? "A sample price for exploring this demo. Current pricing and availability haven’t been verified."
+                        : `${checkedLabel(activeProduct)}. Shipping and taxes may change the final total. Confirm the exact variant and price at checkout.`}
                     </p>
                     <div className="detail-buttons">
-                      <a
-                        className="primary-button"
-                        href={outbound(activeProduct, undefined, "detail")}
-                        target="_blank"
-                        rel="noopener noreferrer sponsored"
-                      >
-                        Visit{" "}
-                        {activeProduct.offers[0]?.retailer || "product source"}
-                        <ArrowUpRight size={17} />
-                      </a>
+                      {primaryOffer(activeProduct) ? (
+                        <a
+                          className="primary-button"
+                          href={outbound(activeProduct, undefined, "detail")}
+                          target="_blank"
+                          rel="noopener noreferrer sponsored"
+                        >
+                          Visit{" "}
+                          {primaryOffer(activeProduct)?.retailer ||
+                            "product source"}
+                          <ArrowUpRight size={17} />
+                        </a>
+                      ) : (
+                        <span className="status-pill">
+                          No available retailer offer
+                        </span>
+                      )}
                       <button
                         className={`secondary-button ${saved.includes(activeProduct.id) ? "selected" : ""}`}
                         onClick={() => toggleSave(activeProduct.id)}
@@ -1511,6 +1673,12 @@ export default function Velora() {
                     <div className="pros-cons">
                       <div>
                         <h3>What might work for you</h3>
+                        {!activeProduct.pros.length && (
+                          <p>
+                            No evidence-backed advantages supplied. Compare the
+                            listed specifications with your needs.
+                          </p>
+                        )}
                         {activeProduct.pros.map((p) => (
                           <p key={p}>
                             <Plus size={15} />
@@ -1520,6 +1688,12 @@ export default function Velora() {
                       </div>
                       <div>
                         <h3>What to keep in mind</h3>
+                        {!activeProduct.cons.length && (
+                          <p>
+                            No documented trade-offs supplied. Missing
+                            information is not evidence of reliability.
+                          </p>
+                        )}
                         {activeProduct.cons.map((p) => (
                           <p key={p}>
                             <span className="minus-mark">−</span>
@@ -1529,12 +1703,19 @@ export default function Velora() {
                       </div>
                     </div>
                     <p className="data-note">
-                      Illustrative assessments based on sample catalog
-                      attributes; not verified review analysis.
+                      {activeProduct.source.status === "demo"
+                        ? "Illustrative assessments based on sample catalog attributes; not verified review analysis."
+                        : "Trade-offs reflect supplied product attributes, not independent testing or AI-generated review analysis."}
                     </p>
                   </section>
                   <section>
                     <h2>The finer details.</h2>
+                    {!Object.keys(activeProduct.specs).length && (
+                      <p className="data-note">
+                        This source has not supplied specifications. Review the
+                        exact listing before buying.
+                      </p>
+                    )}
                     <dl className="specification-list">
                       {Object.entries(activeProduct.specs).map(([k, v]) => (
                         <div key={k}>
@@ -1551,22 +1732,33 @@ export default function Velora() {
                         <div>
                           <strong>{o.retailer}</strong>
                           <small>
-                            Availability, delivery, warranty & returns: check
-                            source
+                            {o.availability === "unknown"
+                              ? "Availability unknown"
+                              : o.availability.replace(/_/g, " ")}{" "}
+                            · Delivery & returns: check source
                           </small>
                         </div>
                         <div>
                           <strong>{money(o.price, o.currency)}</strong>
-                          <small>Sample price</small>
+                          <small>
+                            {priceLabel(activeProduct)}
+                            {o.lastChecked
+                              ? ` · ${new Date(o.lastChecked).toLocaleDateString()}`
+                              : ""}
+                          </small>
                         </div>
-                        <a
-                          href={outbound(activeProduct, o.id, "detail")}
-                          target="_blank"
-                          rel="noopener noreferrer sponsored"
-                          className="secondary-button"
-                        >
-                          View source <ArrowUpRight size={15} />
-                        </a>
+                        {o.availability === "out_of_stock" ? (
+                          <span className="status-pill">Out of stock</span>
+                        ) : (
+                          <a
+                            href={outbound(activeProduct, o.id, "detail")}
+                            target="_blank"
+                            rel="noopener noreferrer sponsored"
+                            className="secondary-button"
+                          >
+                            View source <ArrowUpRight size={15} />
+                          </a>
+                        )}
                       </div>
                     ))}
                   </section>
@@ -1583,14 +1775,23 @@ export default function Velora() {
                         >
                           {activeProduct.source.name}
                         </a>
-                        . Demo attributes and prices have not been checked live.
-                        Customer ratings, review counts, historical prices, and
-                        reliability evidence are unavailable.
+                        . {checkedLabel(activeProduct)}.{" "}
+                        {reviewLabel(activeProduct)}.
+                        {activeProduct.warranty
+                          ? ` Warranty: ${activeProduct.warranty}.`
+                          : " Warranty information unavailable."}
+                        {activeProduct.returnPolicy
+                          ? ` Returns: ${activeProduct.returnPolicy}.`
+                          : " Check return terms with the retailer."}
                       </p>
                     </div>
                   </section>
                 </div>
               </>
+            ) : catalog.loading ||
+              (requestedProductId &&
+                !catalog.unavailable.includes(requestedProductId)) ? (
+              <p role="status">Loading product details…</p>
             ) : (
               <EmptyState
                 title="We couldn’t find that product."
@@ -1604,13 +1805,21 @@ export default function Velora() {
                 title="Good things are worth watching."
                 description="Save a target price for products you’re considering. Your budget stays in your hands."
               />
+              <PriceMonitoring
+                ref={monitoringRef}
+                authenticated={!!account?.authenticated}
+                onProduct={(id) => nav(`/product/${id}`)}
+                onSignIn={() => setModal("account")}
+              />
               <div className="notice">
                 <Bell size={19} />
                 <div>
-                  <strong>Your price wish list, for now.</strong>
+                  <strong>Targets saved on this device</strong>
                   <p>
-                    Targets are saved in this browser. Live price monitoring and
-                    notifications aren’t connected, so no alerts will be sent.
+                    These targets are saved in this browser. They are not
+                    monitored, so no alerts will be sent. To monitor an eligible
+                    retailer product, sign in and enable an alert from its
+                    details.
                   </p>
                 </div>
               </div>
@@ -1628,7 +1837,9 @@ export default function Velora() {
                         </button>
                         <div className="watch-name">
                           <h3>{p.name}</h3>
-                          <span>Sample price {money(p.price, p.currency)}</span>
+                          <span>
+                            {priceLabel(p)} {money(p.price, p.currency)}
+                          </span>
                         </div>
                         <div className="watch-target">
                           <span>Your target</span>
@@ -1638,7 +1849,8 @@ export default function Velora() {
                         <button
                           className="text-button"
                           onClick={() => {
-                            setWatchProduct(p);
+                            startWatch(p);
+                            setWatchRemotely(false);
                             setTarget(String(w.target));
                           }}
                         >
@@ -1659,6 +1871,8 @@ export default function Velora() {
                     ) : null;
                   })}
                 </div>
+              ) : account?.authenticated ? (
+                <p className="data-note">No targets saved on this device.</p>
               ) : (
                 <EmptyState
                   icon={Bell}
@@ -1691,10 +1905,11 @@ export default function Velora() {
                       <option value="AUD">AUD — Australian Dollar</option>
                       <option value="EUR">EUR — Euro</option>
                       <option value="GBP">GBP — British Pound</option>
+                      <option value="CAD">CAD — Canadian Dollar</option>
                     </select>
                     <small>
-                      The demo catalog uses USD. Other currencies need a
-                      compatible product provider; we don’t invent exchange
+                      Searches use offers in this currency. The demo catalog is
+                      USD only. We don’t convert prices using guessed exchange
                       rates.
                     </small>
                   </label>
@@ -1710,10 +1925,12 @@ export default function Velora() {
                       <option>Australia</option>
                       <option>United Kingdom</option>
                       <option>European Union</option>
+                      <option>Canada</option>
                     </select>
                     <small>
-                      Saved for future retailer integrations. Local availability
-                      is currently unverified.
+                      Saved as a shopping preference. Marketplaces currently
+                      follow your currency; delivery to your address must be
+                      confirmed with the retailer.
                     </small>
                   </label>
                   <div className="setting-line">
@@ -1745,6 +1962,12 @@ export default function Velora() {
                 </section>
                 <section className="settings-section">
                   <h2>Privacy & data</h2>
+                  <p>
+                    When an external AI service is configured, it receives your
+                    shopping request and selected priorities. Your account
+                    identity and password are not included. Product searches go
+                    to the selected catalog provider.
+                  </p>
                   <div className="setting-line">
                     <div>
                       <strong>Optional usage analytics</strong>
@@ -1800,6 +2023,10 @@ export default function Velora() {
                       ? `Signed in as ${account.user?.displayName}.`
                       : "You’re shopping as a guest. Everything you need to explore is available without creating an account."}
                   </p>
+                  <AccountAccess
+                    key={account?.user?.id || "guest"}
+                    onChange={refreshAccount}
+                  />
                   {account?.syncAvailable && account.authenticated ? (
                     <div className="account-actions">
                       <button
@@ -1812,50 +2039,96 @@ export default function Velora() {
                       </button>
                       <button
                         className="secondary-button"
-                        onClick={() => {
-                          if (account.state) {
-                            setSaved(account.state.savedProductIds || []);
-                            setCompare(
-                              account.state.comparisonProductIds || [],
-                            );
-                            setPrefs(account.state.preferences || defaultPrefs);
-                            setHistory(account.state.searchHistory || []);
+                        disabled={syncing}
+                        onClick={async () => {
+                          setSyncing(true);
+                          try {
+                            const response = await fetch("/api/account", {
+                              cache: "no-store",
+                            });
+                            const data = (await response.json()) as Account & {
+                              error?: string;
+                            };
+                            if (!response.ok)
+                              throw new Error(
+                                data.error ||
+                                  "Unable to load your cloud workspace.",
+                              );
+                            setAccount(data);
+                            if (!data.state) {
+                              notify("No synced workspace found");
+                              return;
+                            }
+                            setSaved(data.state.savedProductIds);
+                            setCompare(data.state.comparisonProductIds);
+                            setPrefs({
+                              ...data.state.preferences,
+                              theme:
+                                data.state.preferences.theme === "dark"
+                                  ? "dark"
+                                  : "light",
+                            });
+                            setHistory(data.state.searchHistory.slice(0, 20));
                             notify("Loaded your synced workspace");
-                          } else notify("No synced workspace found");
+                          } catch (reason) {
+                            notify(
+                              reason instanceof Error
+                                ? reason.message
+                                : "Cloud storage is unavailable. Your browser data is unchanged.",
+                            );
+                          } finally {
+                            setSyncing(false);
+                          }
                         }}
                       >
                         Load synced workspace
                       </button>
                       <button
                         className="text-button danger-text"
+                        disabled={syncing}
                         onClick={async () => {
                           if (
-                            window.confirm(
-                              "Delete your cloud workspace? This permanently deletes your Velora account data, not your ChatGPT account.",
+                            !window.confirm(
+                              "Delete your Velora account and cloud data? This removes saved cloud products, alerts, and your Velora login. Browser data and any separate ChatGPT account are unchanged.",
                             )
-                          ) {
-                            const r = await fetch("/api/account", {
+                          )
+                            return;
+                          setSyncing(true);
+                          try {
+                            const response = await fetch("/api/account", {
                               method: "DELETE",
                             });
-                            if (r.ok) {
-                              setAccount((a) =>
-                                a ? { ...a, state: undefined } : a,
+                            const data = (await response.json()) as {
+                              error?: string;
+                              message?: string;
+                            };
+                            if (!response.ok)
+                              throw new Error(
+                                data.error ||
+                                  "Unable to delete your account. Please try again.",
                               );
-                              notify("Cloud workspace deleted");
-                            } else
-                              notify(
-                                "Unable to delete cloud workspace. Please try again.",
-                              );
+                            refreshAccount();
+                            notify(
+                              data.message || "Cloud account data deleted",
+                            );
+                          } catch (reason) {
+                            notify(
+                              reason instanceof Error
+                                ? reason.message
+                                : "Unable to delete your account. Please try again.",
+                            );
+                          } finally {
+                            setSyncing(false);
                           }
                         }}
                       >
-                        Delete cloud workspace
+                        Delete account and cloud data
                       </button>
                     </div>
                   ) : (
                     <p className="notice">
-                      Cloud sync is not configured. Your browser workspace is
-                      fully usable.
+                      {account?.message ||
+                        "Sign in to use cloud sync when account storage is available. Your browser workspace stays usable."}
                     </p>
                   )}
                   <button
@@ -1868,9 +2141,17 @@ export default function Velora() {
                 <section className="settings-section">
                   <h2>Notifications</h2>
                   <p>
-                    Price monitoring is not connected. No background checks or
-                    notification emails are being sent.
+                    Signed-in shoppers can monitor eligible retailer products
+                    when the monitoring service is configured. Price
+                    notifications appear in your watchlist; email delivery is
+                    not enabled.
                   </p>
+                  <button
+                    className="text-button"
+                    onClick={() => nav("/alerts")}
+                  >
+                    Manage price alerts <ArrowRight size={15} />
+                  </button>
                 </section>
               </div>
             </>
@@ -1956,8 +2237,8 @@ export default function Velora() {
               <strong>Fit comes first.</strong>
               <p>
                 We match your category and requested features to catalog
-                attributes, then consider your selected priorities and sample
-                price. We explain those matches without made-up quality scores.
+                attributes, then consider your selected priorities and price. We
+                explain those matches without made-up quality scores.
               </p>
             </li>
             <li>
@@ -1971,10 +2252,12 @@ export default function Velora() {
           </ol>
           <div className="notice">
             <p>
-              This version uses a sample catalog and a rule-based shopping
-              assistant. A configurable AI provider can help interpret requests
-              when connected. No live retailer research or review analysis is
-              running.
+              {catalog.mode === "demo"
+                ? "This installation uses a clearly labeled sample catalog."
+                : "Product facts come from the connected retailer or approved product feed."}{" "}
+              The assistant interprets your request, then the retrieval service
+              supplies product facts. An AI model never creates product prices,
+              specifications, or reviews.
             </p>
           </div>
         </Modal>
@@ -2020,9 +2303,13 @@ export default function Velora() {
         >
           <p>
             {account?.authenticated
-              ? `Welcome, ${account.user?.displayName}. Your identity is provided by the hosting platform.`
+              ? `Welcome, ${account.user?.displayName}. Manage your account and workspace in Settings.`
               : "You’re currently shopping as a guest. Your saved finds, recent searches, and comparisons are stored in this browser."}
           </p>
+          <AccountAccess
+            key={account?.user?.id || "guest"}
+            onChange={refreshAccount}
+          />
           <div className="account-summary">
             <div>
               <strong>{saved.length}</strong>
@@ -2042,15 +2329,17 @@ export default function Velora() {
               ? "Cloud storage is configured. You choose when to sync your workspace in Settings."
               : "Cloud sync is not configured. Guest shopping works without signing in."}
           </p>
-          {!account?.authenticated && account?.identityAvailable && (
-            <a
-              className="primary-button"
-              href="/signin-with-chatgpt?return_to=%2Fsettings"
-              target="_top"
-            >
-              Sign in with ChatGPT <ArrowUpRight size={16} />
-            </a>
-          )}
+          {!account?.authenticated &&
+            !account?.authAvailable &&
+            account?.identityAvailable && (
+              <a
+                className="primary-button"
+                href="/signin-with-chatgpt?return_to=%2Fsettings"
+                target="_top"
+              >
+                Sign in with ChatGPT <ArrowUpRight size={16} />
+              </a>
+            )}
           <button
             className="secondary-button"
             onClick={() => {
@@ -2090,15 +2379,56 @@ export default function Velora() {
             Set a target for <strong>{watchProduct.name}</strong>.
           </p>
           <form
-            onSubmit={(e) => {
+            onSubmit={async (e) => {
               e.preventDefault();
-              if (Number(target) > 0) {
-                setWatches((list) => [
-                  ...list.filter((w) => w.id !== watchProduct.id),
-                  { id: watchProduct.id, target: Number(target) },
-                ]);
+              if (!(Number(target) > 0)) return;
+              setWatchBusy(true);
+              setWatchError("");
+              try {
+                if (watchRemotely) {
+                  const response = await fetch("/api/alerts", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      productId: watchProduct.id,
+                      targetPrice: Number(target),
+                      currency: watchProduct.currency,
+                    }),
+                  });
+                  const data = (await response.json()) as { error?: string };
+                  if (!response.ok)
+                    throw new Error(
+                      data.error || "Price monitoring is unavailable.",
+                    );
+                  notify(
+                    "Price alert created. Check your watchlist for observations and notifications.",
+                  );
+                  monitoringRef.current?.refresh();
+                } else {
+                  if (
+                    !watches.some((w) => w.id === watchProduct.id) &&
+                    watches.length >= 100
+                  )
+                    throw new Error(
+                      "This device can store up to 100 targets. Remove one before adding another.",
+                    );
+                  setWatches((list) => [
+                    ...list.filter((w) => w.id !== watchProduct.id),
+                    { id: watchProduct.id, target: Number(target) },
+                  ]);
+                  notify(
+                    "Price target saved on this device. This target is not monitored.",
+                  );
+                }
                 setWatchProduct(null);
-                notify("Price target saved. Live monitoring is not connected.");
+              } catch (reason) {
+                setWatchError(
+                  reason instanceof Error
+                    ? reason.message
+                    : "Unable to save target.",
+                );
+              } finally {
+                setWatchBusy(false);
               }
             }}
           >
@@ -2114,12 +2444,38 @@ export default function Velora() {
                 required
               />
             </label>
+            {account?.authenticated &&
+              watchProduct.source.status !== "demo" && (
+                <label className="checkbox-field">
+                  <input
+                    type="checkbox"
+                    checked={watchRemotely}
+                    onChange={(event) => setWatchRemotely(event.target.checked)}
+                  />
+                  Monitor this product and notify me in Velora
+                </label>
+              )}
             <p className="notice">
-              This saves a price target only. No price checks or notifications
-              will run until monitoring is connected.
+              {watchRemotely
+                ? "This creates an account alert. Successful scheduled checks record prices and notify you in Velora when your target is met."
+                : "This saves a price target on this device only. No price checks or notifications will run for this target."}
             </p>
-            <button className="primary-button" type="submit">
-              Save my target <Check size={16} />
+            {watchError && (
+              <p className="form-error" role="alert">
+                {watchError}
+              </p>
+            )}
+            <button
+              className="primary-button"
+              type="submit"
+              disabled={watchBusy}
+            >
+              {watchBusy
+                ? "Saving…"
+                : watchRemotely
+                  ? "Create price alert"
+                  : "Save my target"}{" "}
+              <Check size={16} />
             </button>
           </form>
         </Modal>
