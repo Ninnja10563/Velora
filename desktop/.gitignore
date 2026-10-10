@@ -1,0 +1,7 @@
+node_modules/
+dist/
+assets/icon.icns
+assets/icon.iconset/
+assets/icon.png
+*.log
+.env*

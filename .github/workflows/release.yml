@@ -1,0 +1,90 @@
+name: Release macOS Apple Silicon
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing version tag to build (for example v0.1.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ inputs.release_tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: desktop
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Validate version and tag
+        run: |
+          node -e 'const p=require("./package.json"); const tag=process.env.RELEASE_TAG; if (!/^v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(tag) || tag !== "v"+p.version) throw new Error("Release tag must match desktop/package.json version")'
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Test navigation boundary
+        run: npm test
+      - name: Build arm64 DMG
+        run: npm run dist:mac
+        env:
+          VELORA_SITE_URL: ${{ vars.VELORA_SITE_URL }}
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Verify architecture and disk image
+        run: |
+          file dist/mac-arm64/Velora.app/Contents/MacOS/Velora | tee dist/architecture.txt
+          grep -q 'arm64' dist/architecture.txt
+          for image in dist/*.dmg; do hdiutil verify "$image"; done
+          cd dist
+          shasum -a 256 *.dmg > SHA256SUMS.txt
+      - name: Prepare truthful release notes
+        env:
+          HAS_CERTIFICATE: ${{ secrets.MAC_CSC_LINK != '' }}
+          HAS_NOTARY: ${{ secrets.MAC_CSC_LINK != '' && secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
+        run: |
+          node scripts/release-notes.cjs > dist/RELEASE-NOTES.md
+      - name: Retain build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Velora-macOS-arm64-${{ env.RELEASE_TAG }}
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/SHA256SUMS.txt
+            desktop/dist/architecture.txt
+            desktop/dist/RELEASE-NOTES.md
+          if-no-files-found: error
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/*.dmg dist/SHA256SUMS.txt --clobber
+            gh release edit "$RELEASE_TAG" --notes-file dist/RELEASE-NOTES.md
+          else
+            gh release create "$RELEASE_TAG" dist/*.dmg dist/SHA256SUMS.txt --verify-tag --title "Velora $RELEASE_TAG — macOS Apple Silicon" --notes-file dist/RELEASE-NOTES.md
+          fi
