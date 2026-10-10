@@ -2928,3 +2928,10 @@ button {
     font-size: 10px;
   }
 }
+
+.product-image .image-caption {
+  top: 8px;
+  bottom: auto;
+  left: 8px;
+  right: auto;
+}

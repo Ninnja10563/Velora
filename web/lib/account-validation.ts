@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { requestOriginMatches } from "./security.ts";
 
 const productId = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9_-]+$/);
 
@@ -23,11 +24,7 @@ export type AccountState = z.infer<typeof accountStateSchema>;
 export function isSameOriginRequest(request: Request): boolean {
   const origin = request.headers.get("origin");
   if (!origin || origin === "null") return false;
-  try {
-    return new URL(origin).origin === new URL(request.url).origin;
-  } catch {
-    return false;
-  }
+  return requestOriginMatches(request);
 }
 
 export function isAllowedAdmin(userId: string | null | undefined, allowlist: string | undefined): boolean {

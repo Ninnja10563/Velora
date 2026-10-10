@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { products, categories } from "../lib/catalog.ts";
 import { extractBudget, rankProducts, searchProducts } from "../lib/search.ts";
 import { deduplicateProducts, inferIntent } from "../lib/providers.ts";
-import { enforceRateLimit, HttpError, isSafeExternalUrl, readJson, resolveAffiliateUrl, searchInputSchema } from "../lib/security.ts";
+import { enforceRateLimit, HttpError, isSafeExternalUrl, readJson, requestOriginMatches, resolveAffiliateUrl, sameOrigin, searchInputSchema } from "../lib/security.ts";
 import { POST as searchRoute } from "../app/api/search/route.ts";
 import { GET as outboundRoute } from "../app/api/outbound/route.ts";
 
@@ -230,6 +230,26 @@ test("search HTTP route validates and returns a grounded end-to-end shopping res
   assert.equal(invalid.status, 400);
   const crossOrigin = await searchRoute(new Request("https://velora.example/api/search", { method: "POST", headers: { "content-type": "application/json", origin: "https://attacker.example" }, body: JSON.stringify({ query: "headphones" }) }));
   assert.equal(crossOrigin.status, 403);
+  const normalizedBindAddress = await searchRoute(new Request("http://0.0.0.0:3000/api/search", { method: "POST", headers: { "content-type": "application/json", origin: "http://127.0.0.1:3000", host: "127.0.0.1:3000" }, body: JSON.stringify({ query: "headphones under $100" }) }));
+  assert.equal(normalizedBindAddress.status, 200, "native Next bind-address normalization must not reject the browser's same-origin search");
+});
+
+test("origin matching respects validated transport Host and ignores spoofed forwarded headers", () => {
+  const check = (origin: string, host: string, extra: Record<string, string> = {}) => requestOriginMatches(new Request("http://0.0.0.0:3000/api/search", { headers: { origin, host, ...extra } }));
+  assert.equal(check("http://127.0.0.1:3000", "127.0.0.1:3000"), true);
+  assert.equal(check("http://localhost:3000", "localhost:3000"), true);
+  assert.equal(check("http://[::1]:3000", "[::1]:3000"), true);
+  assert.equal(check("http://127.0.0.1:3001", "127.0.0.1:3000"), false);
+  assert.equal(check("https://127.0.0.1:3000", "127.0.0.1:3000"), false);
+  assert.equal(check("http://attacker.example", "127.0.0.1:3000"), false);
+  assert.equal(check("http://0.0.0.0:3000", "127.0.0.1:3000"), false, "Host is authoritative over an internal bind URL");
+  assert.equal(check("http://attacker.example", "127.0.0.1:3000", { "x-forwarded-host": "attacker.example", "x-forwarded-proto": "http", forwarded: "host=attacker.example;proto=http" }), false);
+  for (const origin of ["null", "", "http://user:password@127.0.0.1:3000", "http://127.0.0.1:3000/path", "http://127.0.0.1:3000/", "http://127.0.0.1:3000?query=yes", "http://127.0.0.1:3000#hash", "http://127.0.0.1:3000,http://attacker.example", "file:///tmp", "http://127.0.0.1:3000\\path"]) assert.equal(check(origin, "127.0.0.1:3000"), false, origin);
+  for (const host of ["", "user@127.0.0.1:3000", "127.0.0.1:3000/path", "127.0.0.1:3000,attacker.example", "127.0.0.1:70000", "127.0.0.1:", "127.0.0.1:3000?x=y"]) assert.equal(check("http://127.0.0.1:3000", host), false, host);
+  assert.equal(requestOriginMatches(new Request("https://velora.example/api/search", { headers: { origin: "https://velora.example" } })), true);
+  assert.equal(requestOriginMatches(new Request("https://velora.example/api/search")), false, "strict account helper rejects absent Origin");
+  assert.equal(sameOrigin(new Request("https://velora.example/api/search")), true, "read-only search preserves non-browser access");
+  assert.equal(sameOrigin(new Request("https://velora.example/api/search", { headers: { origin: "null" } })), false);
 });
 
 test("outbound HTTP route resolves only known products and offers, never a query-supplied URL", async () => {

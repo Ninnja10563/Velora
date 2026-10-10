@@ -18,8 +18,8 @@ async function search(page: Page, query: string, budget?: string) {
   );
   await page.getByRole("button", { name: "Find my match", exact: true }).click();
   const response = await responsePromise;
-  expect(response.ok()).toBeTruthy();
   const data = await response.json() as { products: SearchProduct[]; clarification?: string };
+  expect(response.status(), JSON.stringify(data)).toBe(200);
   await expect(page.getByRole("button", { name: "Find my match", exact: true })).toBeEnabled();
   return data;
 }

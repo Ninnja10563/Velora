@@ -62,10 +62,38 @@ export function enforceRateLimit(request: Request, scope: string, limit = 30, wi
   buckets.set(key, { count: 1, expires: now + windowMs });
 }
 
-export function sameOrigin(request: Request): boolean {
+function isValidHostAuthority(authority: string): boolean {
+  if (!authority || authority.length > 300) return false;
+  // Host is an authority, not a URL: no credentials, paths, lists, whitespace,
+  // escapes, or forwarded metadata. URL parsing below additionally checks ports.
+  return /^(?:\[[a-fA-F0-9:.]+\]|[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.?)(?::\d{1,5})?$/.test(authority);
+}
+
+/** Browser Origin must match the actual transport Host. Native Next can expose
+ * its bind address in request.url, so that URL is only the fallback when Host
+ * is absent. A browser cannot override Host independently. Forwarded headers
+ * are deliberately ignored; this helper does not assume a trusted proxy.
+ */
+export function requestOriginMatches(request: Request): boolean {
   const origin = request.headers.get("origin");
-  if (!origin) return true;
-  try { return new URL(origin).origin === new URL(request.url).origin; } catch { return false; }
+  if (!origin || !/^https?:\/\/[^/?#\\\s]+$/i.test(origin)) return false;
+  try {
+    const source = new URL(origin);
+    if (source.username || source.password || !isValidHostAuthority(origin.slice(origin.indexOf("://") + 3))) return false;
+    const target = new URL(request.url);
+    if (target.protocol !== "http:" && target.protocol !== "https:") return false;
+    const host = request.headers.get("host");
+    if (host !== null) {
+      if (!isValidHostAuthority(host)) return false;
+      return source.origin === new URL(`${target.protocol}//${host}`).origin;
+    }
+    return source.origin === target.origin;
+  } catch { return false; }
+}
+
+export function sameOrigin(request: Request): boolean {
+  // Read-only shopping search remains usable by non-browser clients.
+  return request.headers.get("origin") === null || requestOriginMatches(request);
 }
 
 export function errorResponse(error: unknown): Response {

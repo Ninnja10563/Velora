@@ -11,6 +11,19 @@ test("account writes reject cross-origin, opaque and missing origins", () => {
   assert.equal(isSameOriginRequest(new Request(url, { headers: { origin: "https://velora.example" } })), true);
 });
 
+test("account writes use the actual Host when Next exposes its internal bind address", () => {
+  const internalUrl = "http://0.0.0.0:3000/api/account";
+  const request = (origin: string, extra: Record<string, string> = {}) => new Request(internalUrl, { headers: { host: "127.0.0.1:3000", origin, ...extra } });
+  assert.equal(isSameOriginRequest(request("http://127.0.0.1:3000")), true);
+  assert.equal(isSameOriginRequest(request("https://attacker.example")), false);
+  assert.equal(isSameOriginRequest(request("http://0.0.0.0:3000")), false);
+  assert.equal(isSameOriginRequest(request("https://127.0.0.1:3000")), false);
+  assert.equal(isSameOriginRequest(request("https://attacker.example", { "x-forwarded-host": "attacker.example", "x-forwarded-proto": "https" })), false);
+  assert.equal(isSameOriginRequest(request("http://127.0.0.1:3000", { host: "127.0.0.1:3000/unsafe" })), false);
+  assert.equal(isSameOriginRequest(request("http://127.0.0.1:3000", { host: "attacker.example@127.0.0.1:3000" })), false);
+  for (const origin of ["null", "http://127.0.0.1:3000/path", "http://user@127.0.0.1:3000"]) assert.equal(isSameOriginRequest(request(origin)), false);
+});
+
 test("admin requires exact allowlist membership and denies development mock", () => {
   assert.equal(isAllowedAdmin(undefined, "owner"), false);
   assert.equal(isAllowedAdmin("owner", undefined), false);
