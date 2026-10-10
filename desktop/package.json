@@ -1,14 +1,19 @@
 {
   "name": "velora-desktop",
   "productName": "Velora",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Velora — a thoughtful shopping companion for macOS",
   "main": "main.cjs",
   "private": true,
   "author": "Velora",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/Ninnja10563/Velora.git" },
-  "engines": { "node": ">=22" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ninnja10563/Velora.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "electron .",
     "test": "node --test tests/*.test.cjs",

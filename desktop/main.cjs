@@ -43,7 +43,19 @@ function createWindow() {
   const session = contents.session;
   session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   session.setPermissionCheckHandler(() => false);
-  session.on("will-download", (event) => event.preventDefault());
+  const handleDownload = (event, item, sourceContents) => {
+    const allowed = sourceContents === contents && policy.isSite(contents.getURL()) && policy.canDownloadExport(item.getURL(), item.getMimeType(), item.getFilename());
+    if (!allowed) { event.preventDefault(); return; }
+    // Only Velora's explicit JSON export can reach a user-visible save dialog.
+    // No download payload or filesystem API is exposed to the renderer.
+    item.setSaveDialogOptions({
+      title: "Export your Velora data",
+      defaultPath: path.join(app.getPath("downloads"), "velora-my-data.json"),
+      filters: [{ name: "JSON data", extensions: ["json"] }],
+    });
+  };
+  session.on("will-download", handleDownload);
+  contents.once("destroyed", () => session.removeListener("will-download", handleDownload));
   contents.on("will-attach-webview", (event) => event.preventDefault());
   contents.on("will-navigate", (event, url) => { if (!policy.canNavigate(url)) event.preventDefault(); });
   contents.on("will-redirect", (event, url) => { if (!policy.canNavigate(url)) event.preventDefault(); });

@@ -97,6 +97,31 @@ function capacityInGb(specification: string): number | undefined {
   return match ? Number(match[1]) * (match[2].toLowerCase() === "tb" ? 1024 : 1) : undefined;
 }
 
+function excludedFeatures(input: SearchInput): string[] {
+  const text = [input.query, ...(input.priorities || [])].join(". ");
+  return needRules.filter(rule => {
+    const before = new RegExp(`\\b(?:without|no|not|avoid|exclude|excluding|don['’]t\\s+(?:need|want)|do\\s+not\\s+(?:need|want))\\s+(?:(?:a|an|any|active|using|with|need|want|interested\\s+in|looking\\s+for)\\s+){0,2}(?:${rule.pattern.source})`, "i");
+    const after = new RegExp(`(?:${rule.pattern.source})\\s+(?:is\\s+)?(?:not\\s+(?:needed|required|wanted)|unnecessary|optional|does(?:n['’]t|\\s+not)\\s+matter)\\b`, "i");
+    return before.test(text) || after.test(text);
+  }).map(rule => rule.tag);
+}
+
+function mentionsMultipleChoices(query: string): boolean {
+  const normalizedQuery = normalize(query);
+  const mentionedModels = products.filter(product => {
+    const family = product.name.replace(/\s+Headphones$/i, "");
+    const withoutBrand = family.toLowerCase().startsWith(`${product.brand.toLowerCase()} `) ? family.slice(product.brand.length + 1) : family;
+    return [family, withoutBrand].some(alias => normalize(alias).length >= 5 && normalizedQuery.includes(normalize(alias)));
+  });
+  if (mentionedModels.length > 1) return true;
+  if (!/\b(compare|comparison|versus|vs|or)\b/i.test(query)) return false;
+  const brands = new Set(products.filter(product => {
+    const escaped = product.brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return !excludesBrand(query, product.brand) && new RegExp(`\\b${escaped}\\b`, "i").test(query);
+  }).map(product => product.brand));
+  return brands.size > 1;
+}
+
 function parseIntent(input: SearchInput): SearchIntent & { kind?: string; exactId?: string; brand?: string } {
   const explicitCategory = categories.find(category => category.id === input.category);
   const rule = kindRules.find(rule => rule.kind === "backpack" && rule.pattern.test(input.query)) || kindRules.find(rule => rule.pattern.test(input.query));
@@ -130,6 +155,20 @@ export function rankProducts(input: SearchInput, catalog: Product[] = products):
   const { kind, exactId, brand, ...intent } = parsed;
   const warnings = ["Demo catalog: prices and specifications are illustrative, not live retailer data. Check the manufacturer before buying.", "Reviews, stock, delivery, warranty, and price history have not been verified. No reliability or review-quality score is assigned."];
   const result: SearchResult = { products: [], summary: "", intent, mode: "demo", warnings };
+  const excluded = excludedFeatures(input);
+  if (excluded.length) {
+    // A missing positive tag does not prove that a product lacks that feature.
+    // Do not reinterpret a negative requirement as a positive recommendation.
+    result.intent.priorities = intent.priorities.filter(priority => !excluded.includes(priority));
+    result.summary = `You asked to avoid ${excluded.join(", ")}. I cannot verify that negative requirement from this sample catalog.`;
+    result.clarification = `The catalog does not consistently document the absence of ${excluded.join(", ")}, so I have not recommended a product. Check manufacturer specifications or try a different requirement.`;
+    return result;
+  }
+  if (mentionsMultipleChoices(input.query)) {
+    result.summary = "You mentioned multiple shopping options. A single-model search would leave out part of your request.";
+    result.clarification = "Search for each model separately and select Compare on its card. The comparison page will show your selected products side by side.";
+    return result;
+  }
   const unsupportedType = /\b(keyboards?|tablets?|televisions?|tvs?|dishwashers?|toasters?|mattresses?|drones?|bicycles?|printers?|routers?|perfumes?|speakers?|desktops?|fridges?|refrigerators?|suitcases?|chargers?|smartwatches?|power ?banks?|(?:phone|iphone|pixel|laptop) cases?)\b/i.test(input.query);
   if (unsupportedType) {
     result.summary = "That product type is not covered by this sample catalog yet.";

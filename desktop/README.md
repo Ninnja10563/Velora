@@ -25,7 +25,7 @@ The result is `dist/Velora-<version>-macOS-arm64.dmg`. Icons are generated deter
 
 ## Security boundary
 
-Remote content has Node integration disabled, context isolation and the renderer sandbox enabled, and no exposed Electron API. Navigation is restricted to the exact Site origin and the explicit authentication origins in `app-config.json`. Wildcard subdomains are not accepted. Popups cannot create additional privileged windows. Permission requests and downloads are denied.
+Remote content has Node integration disabled, context isolation and the renderer sandbox enabled, and no exposed Electron API. Navigation is restricted to the exact Site origin and the explicit authentication origins in `app-config.json`. Wildcard subdomains are not accepted. Popups cannot create additional privileged windows. Permission requests and general downloads are denied. Settings' JSON export is allowed only as a same-Site-origin blob with the expected MIME type and `velora-my-data.json` filename, through a visible save dialog.
 
 The isolated preload observes actual top-level link gestures and sends only their target URL. The main process validates the sending frame and HTTPS URL. First-party outbound product links are resolved through the authenticated Electron session; the resulting retailer URL opens in the system browser without forwarding cookies. Other automatic external navigations are blocked. These choices follow Electron's [security guidance](https://www.electronjs.org/docs/latest/tutorial/security).
 

@@ -33,6 +33,17 @@ test("configuration rejects insecure sites and wildcard authentication origins",
   assert.throws(() => createNavigationPolicy({ siteUrl: config.siteUrl, trustedAuthOrigins: ["https://auth.openai.com/path"] }));
 });
 
+test("downloads permit only the first-party JSON data export blob", () => {
+  const blob = `blob:${policy.siteOrigin}/127a0e99-e983-47d2-9f7c-136b1eacef2a`;
+  assert.equal(policy.canDownloadExport(blob, "application/json", "velora-my-data.json"), true);
+  assert.equal(policy.canDownloadExport(blob, "application/octet-stream", "velora-my-data.json"), false);
+  assert.equal(policy.canDownloadExport(blob, "application/json", "velora-my-data.json.app"), false);
+  assert.equal(policy.canDownloadExport("blob:https://attacker.example/id", "application/json", "velora-my-data.json"), false);
+  assert.equal(policy.canDownloadExport(`${policy.siteOrigin}/download`, "application/json", "velora-my-data.json"), false);
+  assert.equal(policy.canDownloadExport("data:application/json,{}", "application/json", "velora-my-data.json"), false);
+  assert.equal(policy.canDownloadExport(`${blob}#fragment`, "application/json", "velora-my-data.json"), false);
+});
+
 test("preload forwards real outbound gestures and rejects synthetic events", () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "preload.cjs"), "utf8");
   const listeners = {};

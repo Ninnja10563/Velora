@@ -25,6 +25,14 @@ function createNavigationPolicy(config) {
     canNavigate(value) { const url = parseHttpsUrl(value); return Boolean(url && allowed.has(url.origin)); },
     isSite(value) { const url = parseHttpsUrl(value); return Boolean(url && url.origin === site.origin); },
     isOutbound(value) { const url = parseHttpsUrl(value); return Boolean(url && url.origin === site.origin && url.pathname === "/api/outbound" && url.searchParams.get("product")); },
+    canDownloadExport(value, mimeType, filename) {
+      if (typeof value !== "string" || mimeType !== "application/json" || filename !== "velora-my-data.json") return false;
+      try {
+        const blob = new URL(value);
+        const source = parseHttpsUrl(blob.pathname);
+        return blob.protocol === "blob:" && !blob.search && !blob.hash && Boolean(source && source.origin === site.origin);
+      } catch { return false; }
+    },
   };
 }
 

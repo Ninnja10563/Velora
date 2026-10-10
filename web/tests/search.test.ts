@@ -119,6 +119,31 @@ test("gym headphones require supporting sample suitability and other needs remai
   assert.ok(result.warnings.some(warning => warning.includes("studying")));
 });
 
+test("negative feature requirements are never promoted to positive preferences", () => {
+  for (const query of ["headphones without noise cancellation", "headphones with no noise cancellation", "headphones, not wireless", "headphones without any active noise cancellation", "I don't need ANC headphones", "headphones where noise cancellation is not needed"]) {
+    const result = rankProducts({ query });
+    assert.equal(result.products.length, 0, query);
+    assert.match(result.summary, /negative requirement/, query);
+    assert.match(result.clarification || "", /absence/, query);
+    if (/noise|anc/i.test(query)) assert.ok(!result.intent.priorities.includes("noise cancellation"), query);
+    if (/wireless/i.test(query)) assert.ok(!result.intent.priorities.includes("wireless"), query);
+  }
+  const preference = rankProducts({ query: "headphones", priorities: ["not wireless"] });
+  assert.equal(preference.products.length, 0);
+  assert.ok(!preference.intent.priorities.includes("wireless"));
+  assert.ok(rankProducts({ query: "wireless headphones no more than $100" }).products.length > 0, "a budget negation does not negate a feature");
+  assert.ok(rankProducts({ query: "wireless headphones but not Sony" }).products.every(product => product.brand !== "Sony"), "brand exclusion remains supported");
+});
+
+test("a request comparing multiple known models never silently drops all but the first", () => {
+  for (const query of ["Compare Sony WH-1000XM5 and Bose QuietComfort Headphones", 'Compare "WH-1000XM5" versus "WH-CH720N"', "Sony WH-1000XM5 or Bose QuietComfort", "Compare Sony and Bose headphones"]) {
+    const result = rankProducts({ query });
+    assert.equal(result.products.length, 0, query);
+    assert.match(result.clarification || "", /select Compare/, query);
+  }
+  assert.deepEqual(rankProducts({ query: "Sony WH-1000XM5 for travel or studying" }).products.map(product => product.id), ["sony-wh1000xm5"]);
+});
+
 test("currency is never converted or relabeled without an exchange-rate source", () => {
   for (const input of [{ query: "headphones under A$200" }, { query: "laptop under £900" }, { query: "running shoes", currency: "EUR" }]) {
     const result = rankProducts(input);

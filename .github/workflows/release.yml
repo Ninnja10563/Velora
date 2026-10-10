@@ -46,7 +46,11 @@ jobs:
       - name: Test navigation boundary
         run: npm test
       - name: Build arm64 DMG
-        run: npm run dist:mac
+        run: |
+          for signing_key_name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!signing_key_name}" ]; then unset "$signing_key_name"; fi
+          done
+          npm run dist:mac
         env:
           VELORA_SITE_URL: ${{ vars.VELORA_SITE_URL }}
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}

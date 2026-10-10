@@ -4,6 +4,12 @@ import path from "node:path";
 
 type SearchProduct = { id: string; name: string; brand: string; price: number; currency: string };
 
+async function home(page: Page) {
+  await page.goto("/");
+  // Wait for client effects before clicking server-rendered controls during a cold dev start.
+  await expect(page.locator("html")).toHaveAttribute("data-theme", /^(light|dark)$/, { timeout: 60_000 });
+}
+
 async function search(page: Page, query: string, budget?: string) {
   await page.getByRole("textbox", { name: "What are you looking for?" }).fill(query);
   if (budget !== undefined) await page.getByRole("spinbutton", { name: "Maximum budget" }).fill(budget);
@@ -47,7 +53,7 @@ async function screenshot(page: Page, filename: string) {
 test("budgeted discovery, shortlist persistence, comparison, source links, and honest price targets", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
-  await page.goto("/");
+  await home(page);
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Find your kind of");
   const data = await search(page, "Wireless headphones for studying under $200", "200");
   expect(data.products.length).toBeGreaterThanOrEqual(2);
@@ -109,7 +115,7 @@ test("budgeted discovery, shortlist persistence, comparison, source links, and h
 });
 
 test("new searches recover after a brand filter and unsupported requests ask for clarification", async ({ page }) => {
-  await page.goto("/");
+  await home(page);
   await search(page, "Wireless headphones", "200");
   await page.getByRole("combobox", { name: "Filter by brand" }).selectOption("Sony");
   await expect(page.getByRole("article")).toHaveCount(1);
@@ -128,7 +134,7 @@ test("new searches recover after a brand filter and unsupported requests ask for
 });
 
 test("theme and privacy controls persist; desktop landing page renders without overflow", async ({ page }) => {
-  await page.goto("/");
+  await home(page);
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await assertNoHorizontalOverflow(page);
   await screenshot(page, "velora-desktop-home.png");
@@ -146,7 +152,7 @@ test("theme and privacy controls persist; desktop landing page renders without o
 
 test("mobile navigation, discovery, and results fit the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/");
+  await home(page);
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await assertNoHorizontalOverflow(page);
   await screenshot(page, "velora-mobile-home.png");
