@@ -48,10 +48,16 @@ npm run dev:local
 
 Create an account in Velora, open its confirmation message in the captured local inbox, and follow the confirmation link. Recovery messages are captured there too; the local stack does not deliver them to an external mailbox. The committed templates use token hashes and `/auth/confirm`. `APP_URL` and the browser hostname must remain consistent for same-origin requests and cookies. The generated environment selects local Supabase, the demo catalog, and local intent parsing. It does not enable live shopping or email price alerts.
 
+To rebuild this local project's database from migrations, keep the local stack running. This removes its existing local data:
+
+```sh
+npm run local:reset
+```
+
+When you finish using the local stack, stop it separately:
+
 ```sh
 npm run local:stop
-# Destructive to this local project's database only: rebuild migrations from scratch.
-npm run local:reset
 ```
 
 Never append `--linked` or a hosted database URL to local reset commands. `supabase/config.toml` has no hosted project linkage. See [Supabase local workflow](https://supabase.com/docs/guides/local-development/cli-workflows) and [configuration reference](https://supabase.com/docs/guides/local-development/cli/config).
@@ -69,16 +75,19 @@ Use production subjects/content rather than the local templates’ development-i
 
 ## Verification without external services
 
+Before the browser checks, stop any existing native Next development server so the guest suite starts with the explicit demo configuration below. Clear `PLAYWRIGHT_BASE_URL` so it cannot redirect the checks to another running deployment. If the local Supabase stack is running, stop it before `test:integration`: the synthetic protocol server reserves port 54321 and refuses to reuse an existing service.
+
 ```sh
 npm run typecheck
 npm test
 npm run test:db
 npx playwright install chromium
-npm run test:e2e
+unset PLAYWRIGHT_BASE_URL
+PRODUCT_PROVIDER=demo AI_PROVIDER=local npm run test:e2e
 npm run test:integration
 ```
 
-Run the browser suites sequentially. Stop an existing native Next development server before the integration suite because Next holds a development build lock. Stop the local Supabase stack first: integration fixtures intentionally reserve port 54321 and refuse to reuse an existing service.
+Run the browser suites sequentially. Each suite starts and stops its own Next development server; running them together conflicts with Next's development build lock. Setting provider variables cannot change the configuration of a server that is already running.
 
 - `test:e2e` exercises guest discovery, budget filtering, saved products, comparison, retailer redirects, local price targets, responsive layout, and preferences against the demo adapter.
 - `test:integration` starts an isolated Next server on port 3100 and an explicitly synthetic protocol server on port 54321. It exercises real application route validation, feed parsing, affiliate redirect configuration, Supabase-style confirmation/session cookies, storage ownership, and rejection paths. The fixture's invented products, users, keys, and URLs are test data. It does not verify a real retailer, GoTrue deployment, notification delivery, or an affiliate partnership.
